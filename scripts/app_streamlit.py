@@ -42,7 +42,7 @@ st.set_page_config(
 # ---- Sidebar: info + controles ----
 with st.sidebar:
     st.title("⚡ RAG ANEEL")
-    st.caption("Legislação do setor elétrico brasileiro (2016, 2021, 2022)")
+    st.caption("Legislação do setor elétrico brasileiro (atos de 2015 a 2022)")
 
     st.markdown("---")
     st.markdown("### Arquitetura")
@@ -56,7 +56,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### Escopo coberto")
-    st.markdown("**Anos:** 2016, 2021, 2022\n\n**Tema:** Legislação ANEEL (setor elétrico)")
+    st.markdown("**Anos:** 2015, 2016, 2020, 2021, 2022\n\n**Tema:** Legislação ANEEL (setor elétrico)")
 
     st.markdown("---")
     if st.button("🔄 Limpar conversa", use_container_width=True):
@@ -104,7 +104,7 @@ _bge_warming = (
 col_title, col_status = st.columns([5, 1])
 with col_title:
     st.title("Agente RAG — Legislação ANEEL")
-    st.caption("Legislação do setor elétrico (2016, 2021, 2022). Cita fontes e mantém contexto da conversa.")
+    st.caption("Legislação do setor elétrico (atos de 2015, 2016, 2020, 2021, 2022). Cita fontes e mantém contexto da conversa.")
 with col_status:
     if _bge_warming:
         st.caption("⏳ aquecendo BGE")

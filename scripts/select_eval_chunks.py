@@ -21,7 +21,7 @@ cur.execute("""
     WHERE chunk_type = 'artigo'
       AND num_chars BETWEEN 200 AND 1000
       AND breadcrumb LIKE 'REN %'
-      AND ano IN (2016, 2021, 2022)
+      AND ano IN (2015, 2016, 2020, 2021, 2022)
     ORDER BY DBMS_RANDOM.VALUE
     FETCH FIRST 8 ROWS ONLY
 """)
@@ -44,7 +44,7 @@ cur.execute("""
            OR LOWER(text_raw) LIKE 'i - %'
            OR LOWER(text_raw) LIKE '%é o conjunto%'
            OR LOWER(text_raw) LIKE '%significa%')
-      AND ano IN (2016, 2021, 2022)
+      AND ano IN (2015, 2016, 2020, 2021, 2022)
     ORDER BY DBMS_RANDOM.VALUE
     FETCH FIRST 6 ROWS ONLY
 """)

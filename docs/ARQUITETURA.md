@@ -219,7 +219,7 @@ Sequência exata em `_do_answer_stream` (rag_agent.py:989):
 
 | # | Camada | Sinal | Ação | `refusal_reason` | Custo |
 |---|---|---|---|---|---|
-| 1 | **Temporal** | Query menciona ano fora de {2016, 2021, 2022} | Recusa com mensagem amigável | `fora_escopo_temporal` | ~1ms |
+| 1 | **Temporal** | Query menciona ano fora de {2015, 2016, 2020, 2021, 2022} | Recusa com mensagem amigável | `fora_escopo_temporal` | ~1ms |
 | 2 | **Escopo** | Query sem termo de domínio + palavras off-topic (futebol, política) | Recusa cedo | `fora_escopo_tematico` | ~1ms |
 | 3 | **Retrieval vazio** | Vector + BM25 = 0 resultados | Recusa | `zero_resultados` | ~500ms |
 | 4 | **Gap semântico** | top-1 mediano + gap pequeno até top-10 | Recusa (só se BGE indisponível) | `off_topic_provavel` | ~500ms |
@@ -300,7 +300,7 @@ Constantes em `rag_agent.py:41-53`:
 
 | Constante | Valor | Significado |
 |---|---|---|
-| `ANOS_COBERTOS` | {2016, 2021, 2022} | Anos do corpus |
+| `ANOS_COBERTOS` | {2015, 2016, 2020, 2021, 2022} | Anos do corpus (atos publicados ou referenciados — ver README seção "Cobertura temporal") |
 | `DIST_THRESHOLD_NO_CONFIDENCE` | 0.62 | Acima disso (cosine dist): recusa pós-rerank |
 | `DIST_TOP1_OFFTOPIC` | 0.50 | Top-1 vetor pior que isso → suspeito |
 | `GAP_THRESHOLD` | 0.05 | Gap top1→top10 < isso + top1 ruim → off-topic |

@@ -26,7 +26,15 @@ sugeridas + comandos) | 🐛 **Encontrou bug?** veja [`TROUBLESHOOTING.md`](TROU
 ---
 
 Agente RAG (Retrieval-Augmented Generation) sobre **27.025 PDFs** da legislação da
-**ANEEL** (Agência Nacional de Energia Elétrica) — anos **2016, 2021 e 2022**.
+**ANEEL** (Agência Nacional de Energia Elétrica) — atos publicados ou referenciados em **2015, 2016, 2020, 2021 e 2022**.
+
+> **📅 Cobertura temporal detalhada:** os 3 JSONs originais da ANEEL importados
+> são das **publicações** de 2016, 2021 e 2022. Mas alguns desses PDFs são
+> **republicações de atos normativos anteriores** (24 de 2015 + 44 de 2020),
+> totalizando 5 anos efetivos no corpus. Distribuição real:
+> 2015: 24 PDFs · 2016: 6.155 · 2020: 44 · 2021: 9.416 · 2022: 10.919
+> (467 sem ano detectável). O guardrail temporal aceita queries sobre
+> qualquer um desses 5 anos.
 
 Stack 100% **Oracle Cloud Infrastructure** + componentes open-source onde dá
 vantagem técnica.
@@ -290,7 +298,8 @@ oci os bucket create --name aneel-rag --compartment-id <COMP_OCID>
 
 ```bash
 python scripts/build_manifest.py
-# Lê biblioteca_aneel_*_metadados.json (3 arquivos, anos 2016/2021/2022)
+# Lê biblioteca_aneel_*_metadados.json (3 arquivos: publicações de 2016, 2021, 2022).
+# Atos referenciados podem ser de 2015, 2020, 2021 (publicados nesses anos) → corpus efetivo: 5 anos.
 # Gera manifest/manifest.parquet com 27.025 PDFs
 ```
 
@@ -380,7 +389,7 @@ mais caras (rerank, LLM judge) por último.
 
 | # | Camada | Sinal | `refusal_reason` |
 |---|---|---|---|
-| 1 | **Pré: Temporal** | Query menciona ano fora de {2016, 2021, 2022} | `fora_escopo_temporal` |
+| 1 | **Pré: Temporal** | Query menciona ano fora de {2015, 2016, 2020, 2021, 2022} | `fora_escopo_temporal` |
 | 2 | **Pré: Escopo temático** | Termos off-topic (futebol, Selic, COVID, política) | `fora_escopo_tematico` |
 | 3 | **Pós-retrieval: Vazio** | Vector + BM25 = 0 resultados | `zero_resultados` |
 | 4 | **Pós-retrieval: Gap semântico** | top-1 distante E sem cluster até top-10 | `off_topic_provavel` |
@@ -448,7 +457,7 @@ Art. 5 (0.71), Despacho 4321/2022 (0.43). Latência total: 14.2s.
 
 **Resposta** (em ~0.8s, sem chamar LLM):
 > Esta consulta está fora do escopo do agente, que cobre apenas legislação
-> da ANEEL (anos 2016, 2021, 2022). `refusal_reason: fora_escopo_temporal`
+> da ANEEL (anos 2015, 2016, 2020, 2021, 2022). `refusal_reason: fora_escopo_temporal`
 > (ano 2024 fora do corpus) + `fora_escopo_tematico` (termo "Selic").
 
 ---

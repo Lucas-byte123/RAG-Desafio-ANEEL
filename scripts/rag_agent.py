@@ -2,7 +2,7 @@
 rag_agent.py — Agente RAG para legislação ANEEL com 5 camadas de guardrails.
 
 Camadas:
-  1. Pre-check TEMPORAL  — se query menciona ano ≠ {2016,2021,2022}, recusa
+  1. Pre-check TEMPORAL  — se query menciona ano ≠ {2015,2016,2020,2021,2022}, recusa
   2. Pre-check ESCOPO    — se query é sobre tema off-topic (petróleo, saúde, bacen...), recusa
   3. Retrieval HÍBRIDO   — vector search + BM25 fundidos via Reciprocal Rank Fusion
   4. Rerank              — Cohere Rerank v3 melhora precisão do top-K
@@ -42,7 +42,13 @@ USER = "ADMIN"
 # Funções de classe usam self._jlog. Esse logger compartilha o mesmo arquivo JSONL.
 _module_jlog = JsonLogger(ROOT / "logs" / "agent.jsonl")
 
-ANOS_COBERTOS = {2016, 2021, 2022}
+# Cobertura temporal real do corpus (extraída do registro_titulo de manifest):
+# - 6.155 PDFs de 2016 + 9.416 de 2021 + 10.919 de 2022 (publicados nesses anos)
+# - 24 PDFs de atos de 2015 publicados em 2016
+# - 44 PDFs de atos de 2020 publicados em 2021
+# - 467 PDFs sem ano detectável no título
+# Total: 27.025 PDFs cobrindo atos normativos dos anos abaixo.
+ANOS_COBERTOS = {2015, 2016, 2020, 2021, 2022}
 
 # Configuração dos guardrails
 DIST_THRESHOLD_NO_CONFIDENCE = 0.62   # acima disso: recusa após rerank
@@ -378,7 +384,7 @@ _CHITCHAT_RESPONSES = {
     "saudacao": (
         "Olá! Sou um agente especializado em legislação da ANEEL "
         "(resoluções, portarias, despachos, ofícios e notas técnicas dos "
-        "anos 2016, 2021 e 2022). Em que posso ajudar?"
+        "anos 2015, 2016, 2020, 2021 e 2022). Em que posso ajudar?"
     ),
     "agradecimento": "De nada! Se tiver outra dúvida sobre legislação ANEEL, é só perguntar.",
     "elogio": "Obrigado, fico feliz que ajudou! Pode mandar mais perguntas sobre legislação ANEEL quando quiser.",
@@ -589,7 +595,7 @@ def check_temporal(query: str) -> tuple[bool, str]:
     in_scope = years_full & ANOS_COBERTOS
     if out_of_scope and not in_scope:
         anos_str = ", ".join(str(y) for y in sorted(out_of_scope))
-        return False, (f"Minha base cobre apenas legislação ANEEL de **2016, 2021 e 2022**. "
+        return False, (f"Minha base cobre apenas legislação ANEEL de **2015, 2016, 2020, 2021 e 2022**. "
                        f"Você mencionou {anos_str}, que está fora do escopo.")
     return True, ""
 
@@ -740,7 +746,7 @@ def rrf_fuse(vector_results: list[RetrievedChunk], bm25_results: list[RetrievedC
 
 def extract_filters_from_query(query: str) -> dict:
     """Extrai filtros (ano) da query. Só filtra por ano quando há exatamente UM
-    ano coberto na query — queries com múltiplos anos ("compare 2016 e 2021")
+    ano coberto na query — queries com múltiplos anos ("compare 2016 e 2021" ou "2015 vs 2020")
     NÃO filtram, pra não eliminar chunks de outros anos do retrieval."""
     filters = {}
     all_years = re.findall(r"\b(?:19|20)\d{2}\b", query)
@@ -842,7 +848,7 @@ def rerank_bge(query: str, chunks: list[RetrievedChunk],
 
 # -------- PROMPT / LLM --------
 
-SYSTEM_PROMPT = """Você é um assistente especializado em legislação da ANEEL (Agência Nacional de Energia Elétrica, Brasil), com foco em resoluções, portarias, despachos, ofícios e notas técnicas dos anos 2016, 2021 e 2022.
+SYSTEM_PROMPT = """Você é um assistente especializado em legislação da ANEEL (Agência Nacional de Energia Elétrica, Brasil), com foco em resoluções, portarias, despachos, ofícios e notas técnicas dos anos 2015, 2016, 2020, 2021 e 2022 (atos publicados ou referenciados nesses anos).
 
 PERFIL DE RESPOSTA:
 - Tom técnico e formal, mas NÃO mecânico. Você é um especialista jurídico que SINTETIZA o que a regulação diz, não um copiador de texto legal.
@@ -1396,7 +1402,7 @@ class RAGAgent:
                     resp.answer = (
                         "Sua pergunta parece estar fora do meu domínio. "
                         "Eu só conheço a legislação da ANEEL (Agência Nacional de Energia Elétrica) "
-                        "dos anos 2016, 2021 e 2022. Tente reformular para um tema do setor elétrico — "
+                        "dos anos 2015, 2016, 2020, 2021 e 2022. Tente reformular para um tema do setor elétrico — "
                         "por exemplo: tarifas, geração distribuída, resoluções normativas, concessões."
                     )
                     resp.sources = vec_res[:3]
@@ -1423,7 +1429,7 @@ class RAGAgent:
                 resp.refusal_reason = "off_topic_rerank"
                 resp.answer = (
                     "Sua pergunta provavelmente está fora do meu domínio. "
-                    "Eu só conheço a legislação da ANEEL de 2016, 2021 e 2022. "
+                    "Eu só conheço a legislação da ANEEL de 2015, 2016, 2020, 2021 e 2022. "
                     "Tente reformular usando termos do setor elétrico."
                 )
                 resp.sources = top[:3]
@@ -1445,7 +1451,7 @@ class RAGAgent:
                 resp.refusal_reason = "baixa_confianca"
                 resp.answer = ("Não encontrei trechos suficientemente relevantes na minha base. "
                               "Tente reformular a pergunta ou verifique se o assunto está dentro do "
-                              "escopo (legislação ANEEL 2016, 2021, 2022).")
+                              "escopo (legislação ANEEL 2015, 2016, 2020, 2021, 2022).")
                 resp.sources = top[:3]
                 resp.elapsed_ms = int((time.time() - t0) * 1000)
                 yield ("done", resp)
@@ -1717,7 +1723,7 @@ class RAGAgent:
                     resp.answer = (
                         "Sua pergunta parece estar fora do meu domínio. "
                         "Eu só conheço a legislação da ANEEL (Agência Nacional de Energia Elétrica) "
-                        "dos anos 2016, 2021 e 2022. Tente reformular para um tema do setor elétrico — "
+                        "dos anos 2015, 2016, 2020, 2021 e 2022. Tente reformular para um tema do setor elétrico — "
                         "por exemplo: tarifas, geração distribuída, resoluções normativas, concessões."
                     )
                     resp.sources = vec_res[:3]
@@ -1743,7 +1749,7 @@ class RAGAgent:
                 resp.refusal_reason = "off_topic_rerank"
                 resp.answer = (
                     "Sua pergunta provavelmente está fora do meu domínio. "
-                    "Eu só conheço a legislação da ANEEL de 2016, 2021 e 2022. "
+                    "Eu só conheço a legislação da ANEEL de 2015, 2016, 2020, 2021 e 2022. "
                     "Tente reformular usando termos do setor elétrico."
                 )
                 resp.sources = top[:3]
@@ -1765,7 +1771,7 @@ class RAGAgent:
                 resp.refusal_reason = "baixa_confianca"
                 resp.answer = ("Não encontrei trechos suficientemente relevantes na minha base. "
                               "Tente reformular a pergunta ou verifique se o assunto está dentro do "
-                              "escopo (legislação ANEEL 2016, 2021, 2022).")
+                              "escopo (legislação ANEEL 2015, 2016, 2020, 2021, 2022).")
                 resp.sources = top[:3]
                 resp.elapsed_ms = int((time.time() - t0) * 1000)
                 return resp
