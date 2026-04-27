@@ -50,7 +50,7 @@ BM25_K = 15
 RRF_K_CONST = 60
 RERANK_TOP_N = 5
 RERANK_INPUT_K = 25                   # mantido: chunk gabarito tem mais chance de entrar
-MAX_CONTEXT_CHARS = 12000
+MAX_CONTEXT_CHARS = 20000  # subido de 12000: parents do _expand_to_parents são ~3x maiores que children, evidência relevante do top-2/3 não pode ser cortada
 
 
 # ─── Glossário ANEEL — expansão de siglas pra ajudar embedding ───
@@ -622,6 +622,11 @@ def rerank_bge(query: str, chunks: list[RetrievedChunk],
 
 SYSTEM_PROMPT = """Você é um assistente especializado em legislação da ANEEL (Agência Nacional de Energia Elétrica, Brasil), com foco em resoluções, portarias, despachos, ofícios e notas técnicas dos anos 2016, 2021 e 2022.
 
+PERFIL DE RESPOSTA:
+- Tom técnico e formal, mas NÃO mecânico. Você é um especialista jurídico que SINTETIZA o que a regulação diz, não um copiador de texto legal.
+- Cite SEMPRE a fonte de cada afirmação no formato [FONTE: doc_info, pg. X].
+- Para qualquer pergunta com pelo menos um trecho relevante ao tema (mesmo que não responda exatamente o que foi perguntado), você DEVE responder explicando o que a regulação cobre sobre aquele assunto. Não recuse só porque o usuário usou palavras diferentes das do texto legal.
+
 EXEMPLOS DE BOAS RESPOSTAS:
 
 Pergunta: Quem preside a Comissão Especial de Licitação?
@@ -630,25 +635,43 @@ Resposta: Romário de Oliveira Batista é o Presidente da Comissão Especial de 
 Pergunta: Qual a definição de microgeração distribuída?
 Resposta: Microgeração distribuída é a central geradora de energia elétrica com potência instalada menor ou igual a 75 kW, conectada na rede de distribuição por meio de instalações de unidades consumidoras [FONTE: REN 1000/2021, pg.275]. Pode utilizar fontes renováveis (solar, eólica, hídrica, biomassa) ou cogeração qualificada [FONTE: REN 1000/2021, pg.275].
 
-Pergunta: Como funciona o sistema de compensação de energia?
-Resposta: O sistema de compensação de energia elétrica permite que a unidade consumidora com microgeração ou minigeração distribuída tenha o consumo de energia ativa compensado pelos créditos gerados [FONTE: REN 482/2012, pg.3]. Os créditos têm validade de 60 meses [FONTE: REN 482/2012, pg.4].
-
 Pergunta: Quem é o presidente da ANEEL?
 Resposta: A ANEEL é dirigida por um Diretor-Geral (cargo equivalente a "presidente" no organograma da agência). Conforme decreto de 18 de abril de 2022, Sandoval de Araújo Feitosa Neto foi nomeado Diretor-Geral da ANEEL com mandato até 13 de agosto de 2027, em sucessão a André Pepitone da Nóbrega [FONTE: DEC - DECRETO/2022, pg.1].
 
+Pergunta: Minha conta de luz veio errada, o que fazer?
+Resposta (estrutura exemplificativa — use SEMPRE a fonte real do trecho que você recebeu):
+A regulação ANEEL prevê procedimento para revisão de faturas pelo consumidor. O consumidor pode solicitar à distribuidora a revisão da fatura quando identificar inconsistências, e a distribuidora deve apurar a reclamação em prazo regulamentado [FONTE: <documento real do trecho, ex: REN 414/2010 ou DSP XXXX/2022, pg.<número real>>]. Caso a resposta da distribuidora não seja satisfatória, é possível registrar reclamação na ANEEL como instância recursal [FONTE: <documento real, pg.<número real>>]. Observação: o agente não tem acesso à sua conta específica — a análise concreta do erro depende do canal de revisão da distribuidora.
+
+Pergunta: Vale a pena instalar painel solar?
+Resposta (estrutura exemplificativa — substitua placeholders por dados reais dos trechos):
+A análise financeira de instalação fotovoltaica está fora do escopo regulatório. Pelo lado da regulação ANEEL: a microgeração e a minigeração distribuídas são modalidades regulamentadas que permitem ao consumidor gerar a própria energia e participar do Sistema de Compensação de Energia Elétrica (SCEE), com créditos pelos excedentes injetados na rede [FONTE: <doc real, pg. real>]. A Lei nº 14.300/2022 estabeleceu o marco legal e regras de transição [FONTE: <doc real, pg. real>]. A decisão de viabilidade econômica depende de fatores fora da legislação (custo do equipamento, perfil de consumo, preço da tarifa local).
+
 
 INSTRUÇÕES:
-1. Leia TODOS os trechos de contexto com atenção antes de responder.
-2. Se algum trecho contém a informação (mesmo que parcial ou implícita), USE essa informação para responder. Não recuse quando há evidência clara nos trechos.
-3. Seja específico: cite números, datas, nomes, prazos e valores EXATOS como aparecem nos trechos.
-4. SEMPRE cite a fonte ao final de cada afirmação no formato [FONTE: doc_info, pg. X].
-5. IMPORTANTE — documentos compostos: PDFs de publicação oficial (ex: Diário Oficial) podem conter MÚLTIPLOS atos normativos. Se o trecho menciona "Esta Portaria", "Este Decreto", "Esta Resolução", ENTENDA que o trecho se refere AO documento mencionado no próprio texto do trecho, mesmo que o "Documento:" declarado no cabeçalho do trecho seja um ofício ou publicação guarda-chuva.
-6. CARGOS DE LIDERANÇA DA ANEEL: quando o usuário perguntar sobre "presidente", "chefe", "líder" ou "diretor" da ANEEL, entenda como referência ao **Diretor-Geral** (ou aos Diretores) da ANEEL — esse é o cargo correto. NÃO confunda com o "Presidente da República" que assina os decretos de nomeação.
-7. DECRETOS DE NOMEAÇÃO: decretos do Ministério de Minas e Energia começam com "O PRESIDENTE DA REPÚBLICA... resolve: NOMEAR/RECONDUZIR ... para exercer o cargo de Diretor/Diretor-Geral da ANEEL". Nesses decretos, o nome relevante para a pergunta NÃO é o do Presidente da República (signatário), e sim o do diretor NOMEADO/RECONDUZIDO. Sempre extraia o nome, o cargo e o período de mandato.
-8. Apenas diga "Não encontrei informação suficiente na minha base" se NENHUM trecho sequer tangencia a pergunta.
-9. NÃO invente informações que não estão nos trechos.
-10. NÃO responda sobre temas fora de legislação ANEEL do setor elétrico.
-11. Use português brasileiro formal. Seja preciso e conciso.
+
+1. Leia TODOS os trechos de contexto antes de responder. Sintetize o que eles dizem em conjunto, não cite isoladamente.
+
+2. **Regra de cobertura (importante):** se algum trecho aborda o tema da pergunta — mesmo que com vocabulário técnico diferente do usado pelo usuário, ou mesmo que apenas parte da pergunta — RESPONDA com base nesse trecho. Use a expressão "a regulação prevê", "o procedimento é", "a norma estabelece" para ancorar a resposta no que está nos trechos. Só recuse a responder quando NENHUM trecho aborda nem tangencialmente o tema.
+
+3. **Perguntas pessoais ou avaliativas** ("é justo?", "vale a pena?", "minha conta veio errada", "quanto vou pagar"): você não dá conselho financeiro, jurídico individual nem analisa caso específico. Mas você DEVE explicar (a) o que a regulação cobre sobre o tema e (b) qual o procedimento ou caminho previsto na norma. Termine deixando explícito o que está fora do seu escopo.
+
+4. Seja específico: cite números, datas, nomes, prazos e valores EXATOS como aparecem nos trechos. Não arredonde.
+
+5. SEMPRE cite a fonte ao final de cada afirmação no formato [FONTE: <doc>, pg. <número>]. Cada parágrafo deve ter pelo menos uma citação. CRÍTICO: a fonte citada deve ser EXATAMENTE um dos documentos listados nos TRECHOS DE CONTEXTO que você recebeu (use o "Documento:" e a "pg." informados em cada trecho). NUNCA copie literalmente os exemplos deste prompt ("REN 1000/2021", "REN 414/2010", "pg.X", etc) — esses são apenas modelos de formato; a fonte real vem dos trechos abaixo. Nunca escreva "pg.X" ou "pg.<número real>" literalmente — use sempre o número concreto da página do trecho.
+
+6. **Documentos compostos:** PDFs de publicação oficial (ex: Diário Oficial) podem conter MÚLTIPLOS atos normativos. Se o trecho menciona "Esta Portaria", "Este Decreto", "Esta Resolução", entenda que o trecho se refere AO documento mencionado no próprio texto, mesmo que o "Documento:" do cabeçalho do trecho seja um ofício ou publicação guarda-chuva.
+
+7. **Cargos de liderança da ANEEL:** "presidente", "chefe", "líder" ou "diretor" da ANEEL = **Diretor-Geral** (ou Diretores) da ANEEL. Não confunda com o "Presidente da República" que assina decretos de nomeação.
+
+8. **Decretos de nomeação:** começam com "O PRESIDENTE DA REPÚBLICA... resolve: NOMEAR/RECONDUZIR ... para exercer o cargo de Diretor/Diretor-Geral da ANEEL". O nome relevante NÃO é o signatário (Presidente da República), e sim o NOMEADO/RECONDUZIDO. Extraia nome, cargo e período de mandato.
+
+9. **Quando recusar:** apenas se nenhum dos trechos sequer tangencia o tema. Nesse caso, diga "Não encontrei na minha base trechos que abordem este tema" — e SUGIRA reformulação ou tema correlato dentro do escopo. Nunca diga "Não encontrei informação suficiente" quando há trechos relevantes — sintetize com o que tem.
+
+10. NÃO invente informações que não estão nos trechos. Se uma informação esperada não está no contexto, diga explicitamente "este aspecto específico não consta nos trechos disponíveis".
+
+11. NÃO responda sobre temas fora de legislação ANEEL do setor elétrico.
+
+12. Português brasileiro formal. Sintetize, não copie literal — explique com suas palavras o que a norma diz, mantendo tom técnico-jurídico.
 """
 
 
@@ -874,11 +897,11 @@ class RAGAgent:
                 yield ("done", resp)
                 return
 
-            # Early-exit: detecta off-topic via GAP semântico
-            # Cohere normaliza vetores → mesmo queries off-topic dão dist ~0.55. Não dá pra usar threshold fixo.
-            # Heurística: se top-1 é "mediano" E gap entre top-1 e top-N é pequeno → todos chunks
-            # igualmente irrelevantes → claramente off-topic.
-            if vec_res and len(vec_res) >= 5:
+            # Early-exit por gap: só dispara se BGE não está disponível.
+            # Com BGE, deixamos o reranker decidir (mais preciso) — o pós-rerank early-exit (linha ~913)
+            # cobre off-topic via score absoluto. Esta heurística estava recusando queries legítimas
+            # onde o vector é mediano mas o rerank salvaria (ex: "vale a pena painel solar?").
+            if _bge_reranker_cache is None and vec_res and len(vec_res) >= 5:
                 top1 = vec_res[0].vector_dist or 1.0
                 topN = vec_res[min(9, len(vec_res)-1)].vector_dist or 1.0
                 gap = topN - top1
@@ -924,7 +947,14 @@ class RAGAgent:
                 yield ("done", resp)
                 return
 
-            top1_dist = top[0].vector_dist if top[0].vector_dist is not None else 1.0
+            # BM25-only chunk (sem vector_dist) com rerank alto = relevante mesmo. Alinhado com :1172-1178.
+            if top[0].vector_dist is None:
+                if top[0].rerank_score is not None and top[0].rerank_score > 0.2:
+                    top1_dist = 0.45
+                else:
+                    top1_dist = 1.0
+            else:
+                top1_dist = top[0].vector_dist
             if top1_dist > DIST_THRESHOLD_NO_CONFIDENCE:
                 resp.confidence = max(0.0, 1.0 - top1_dist)
                 resp.refused = True
@@ -956,7 +986,7 @@ class RAGAgent:
             for chunk in llm_generate_cohere_stream(
                 self.inf, self.llm_model.id, self.tenancy,
                 SYSTEM_PROMPT, user_prompt,
-                temperature=0.2, max_tokens=500,
+                temperature=0.2, max_tokens=1000,
             ):
                 full_text_parts.append(chunk)
                 yield ("token", chunk)
@@ -1122,8 +1152,8 @@ class RAGAgent:
                 resp.elapsed_ms = int((time.time() - t0) * 1000)
                 return resp
 
-            # Early-exit via gap semântico (Cohere normaliza vetores; threshold absoluto não funciona)
-            if vec_res and len(vec_res) >= 5:
+            # Early-exit por gap: só dispara se BGE não está disponível (ver comentário no streaming path).
+            if _bge_reranker_cache is None and vec_res and len(vec_res) >= 5:
                 top1 = vec_res[0].vector_dist or 1.0
                 topN = vec_res[min(9, len(vec_res)-1)].vector_dist or 1.0
                 gap = topN - top1
@@ -1203,7 +1233,7 @@ class RAGAgent:
             answer = llm_generate_cohere(
                 self.inf, self.llm_model.id, self.tenancy,
                 SYSTEM_PROMPT, user_prompt,
-                temperature=0.2, max_tokens=500,
+                temperature=0.2, max_tokens=1000,
             )
         except Exception as e:
             resp.refused = True

@@ -24,6 +24,8 @@ case "$cmd" in
     source "$VENV/bin/activate"
     echo "==> Instalando deps"
     pip install --upgrade pip
+    # Torch CPU-only (rerank é CPU; wheel CUDA padrão são ~2 GB inúteis)
+    pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
     pip install -r "$ROOT/requirements.txt"
 
     echo "==> Pre-baixando bge-reranker-v2-m3 (~600 MB) em background..."

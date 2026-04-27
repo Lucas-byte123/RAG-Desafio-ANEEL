@@ -6,6 +6,14 @@ Agente RAG (Retrieval-Augmented Generation) sobre **27.025 PDFs** da legislaçã
 Stack 100% **Oracle Cloud Infrastructure** + componentes open-source onde dá
 vantagem técnica.
 
+> **🎯 Para avaliação rápida (sem rodar nada):** acesse a **[demo ao vivo](https://137-131-141-27.nip.io/)** —
+> o agente está rodando 24/7 em Oracle Compute até **2026-05-25**. As seções
+> "Como rodar" e "Rodar via Docker" abaixo exigem **credenciais OCI próprias**
+> (Autonomous DB populado com 250k vetores + chave de OCI Generative AI). Sem
+> elas, a UI sobe mas todas as queries retornam erro de conexão. O caminho de
+> reprodução completa do pipeline (download de 27k PDFs → extração → embedding)
+> leva ~18h de wall-clock e está documentado na seção "Rebuildar o banco do zero".
+
 ---
 
 ## 🌐 Demo ao vivo
