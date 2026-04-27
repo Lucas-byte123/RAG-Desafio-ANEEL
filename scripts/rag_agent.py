@@ -223,6 +223,103 @@ def is_query_vague(query: str) -> bool:
     return True
 
 
+# Classificador de intenção: chitchat / meta-conversa / pergunta real.
+# Roda antes do retrieval pra evitar 30s de pipeline em "obrigado", "ok", "explica melhor".
+
+_CHITCHAT_PATTERNS = [
+    re.compile(r"^\s*(oi|olá|ola|hey|hi|hello|e a[ií]|opa)[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(obrigad[oa]|valeu|vlw|tks|thanks|agrade[cç]o)[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(ok|certo|beleza|legal|entendi|entendido|perfeito|[óo]timo|massa|joia)[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(bom dia|boa tarde|boa noite)[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(tchau|at[ée] (mais|logo)|fui|valeu então)[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(tudo bem|td bem|como vai|como está)[?!.\s,]*$", re.IGNORECASE),
+]
+
+_META_PATTERNS = [
+    re.compile(r"\b(pode|poderia|consegue) repetir\b", re.IGNORECASE),
+    re.compile(r"\brepete\b|\bdiga (de )?novo\b|\bdiz de novo\b", re.IGNORECASE),
+    re.compile(r"\b(explica|explique|elabore|detalhe|aprofunde) (melhor|mais|novamente|isso|esse|esta|este)\b", re.IGNORECASE),
+    re.compile(r"\b(resume|resumindo|em resumo|tldr|tl;dr)\b", re.IGNORECASE),
+    re.compile(r"\b(n[ãa]o entendi|n[ãa]o ficou claro|n[ãa]o compreendi)\b", re.IGNORECASE),
+    re.compile(r"^\s*(continue|continua|prossiga|vai|pode continuar)\b[!.\s,?]*", re.IGNORECASE),
+    re.compile(r"\b(qual|sobre o que) (foi|era) (a|sua|minha) (pergunta|resposta|[úu]ltima)\b", re.IGNORECASE),
+    re.compile(r"\b(o que você (falou|disse|respondeu))\b", re.IGNORECASE),
+    re.compile(r"^\s*(o terceiro|o segundo|o primeiro|o [úu]ltimo|o item \d+|a parte \d+)\b", re.IGNORECASE),
+]
+
+
+def classify_intent(query: str, has_history: bool) -> str:
+    """Classifica intenção da query: 'chitchat' | 'meta' | 'real_question'.
+    Conservador: em dúvida, retorna 'real_question' (preserva comportamento atual).
+    """
+    q = query.strip()
+    # Chitchat só dispara em mensagens curtas (<= 6 palavras) pra não atrapalhar.
+    if len(q.split()) <= 6:
+        for p in _CHITCHAT_PATTERNS:
+            if p.match(q):
+                return "chitchat"
+    # Meta-conversa só faz sentido com histórico (referência ao que foi dito antes).
+    if has_history:
+        for p in _META_PATTERNS:
+            if p.search(q):
+                # Mas se a query também menciona termo de domínio ANEEL, é pergunta real
+                # (ex: "explica melhor a tarifa branca" — quer mais info sobre tarifa branca,
+                # não só repetição do que já disse).
+                if has_domain_terms(q) and len(q.split()) > 5:
+                    return "real_question"
+                return "meta"
+    return "real_question"
+
+
+_CHITCHAT_RESPONSES = {
+    "saudacao": (
+        "Olá! Sou um agente especializado em legislação da ANEEL "
+        "(resoluções, portarias, despachos, ofícios e notas técnicas dos "
+        "anos 2016, 2021 e 2022). Em que posso ajudar?"
+    ),
+    "agradecimento": "De nada! Se tiver outra dúvida sobre legislação ANEEL, é só perguntar.",
+    "confirmacao": "Tudo certo. Posso esclarecer mais alguma coisa sobre legislação ANEEL?",
+    "despedida": "Até mais. Bom uso da informação regulatória.",
+    "default": "Estou aqui pra responder dúvidas sobre legislação da ANEEL. Pode perguntar.",
+}
+
+
+def chitchat_response(query: str) -> str:
+    q = query.lower().strip()
+    if re.match(r"^\s*(oi|olá|ola|hey|hi|hello|e a[ií]|opa|bom dia|boa tarde|boa noite|tudo bem|td bem|como vai)", q):
+        return _CHITCHAT_RESPONSES["saudacao"]
+    if re.match(r"^\s*(obrigad|valeu|vlw|tks|thanks|agrade)", q):
+        return _CHITCHAT_RESPONSES["agradecimento"]
+    if re.match(r"^\s*(tchau|at[eé]|fui)", q):
+        return _CHITCHAT_RESPONSES["despedida"]
+    if re.match(r"^\s*(ok|certo|beleza|legal|entendi|entendido|perfeito|[óo]timo|massa|joia)", q):
+        return _CHITCHAT_RESPONSES["confirmacao"]
+    return _CHITCHAT_RESPONSES["default"]
+
+
+META_SYSTEM_PROMPT = (
+    "Você é um assistente especializado em legislação ANEEL. O usuário está "
+    "se referindo ao histórico da conversa atual (não a uma nova consulta à base). "
+    "Responda usando APENAS o histórico fornecido — não invente fatos novos. "
+    "Se o usuário pediu para repetir ou reformular, use as informações já "
+    "presentes no histórico, sem buscar nada novo. Se o usuário perguntou sobre "
+    "algo que não está no histórico, diga 'Esse ponto não foi abordado nas "
+    "minhas respostas anteriores. Pode reformular como pergunta direta?'"
+)
+
+
+def build_meta_prompt(query: str, history: list[dict]) -> str:
+    parts = ["### HISTÓRICO DA CONVERSA:\n"]
+    recent = history[-(MAX_HISTORY_TURNS * 2):]
+    for m in recent:
+        role = m.get("role", "").upper()
+        content = (m.get("content", "") or "")[:1500]
+        parts.append(f"{role}: {content}\n")
+    parts.append(f"\n### MENSAGEM ATUAL DO USUÁRIO:\n{query}\n")
+    parts.append("\n### RESPOSTA (use somente o histórico, não invente):\n")
+    return "".join(parts)
+
+
 def hyde_generate(inf, model_id, tenancy, query: str, max_tokens: int = 100) -> str:
     """Gera resposta hipotética curta pra usar em embedding."""
     try:
@@ -847,6 +944,47 @@ class RAGAgent:
         t0 = time.time()
         resp = AgentResponse(query=query, answer="")
 
+        # Camada 0 — classificador de intenção (chitchat / meta / real_question).
+        # Evita 30s de pipeline em mensagens conversacionais ("obrigado", "explica melhor").
+        intent = classify_intent(query, has_history=bool(history))
+        if intent == "chitchat":
+            resp.answer = chitchat_response(query)
+            resp.refused = False
+            resp.confidence = 1.0
+            resp.refusal_reason = "chitchat"  # marcador, não é refusal real
+            resp.elapsed_ms = int((time.time() - t0) * 1000)
+            yield ("meta", resp)
+            for tok in resp.answer.split(" "):
+                yield ("token", tok + " ")
+            yield ("done", resp)
+            return
+
+        if intent == "meta":
+            # Meta-conversa: LLM com history, SEM retrieval/rerank/fontes
+            yield ("meta", resp)
+            meta_prompt = build_meta_prompt(query, history)
+            full_text_parts = []
+            try:
+                for chunk in llm_generate_cohere_stream(
+                    self.inf, self.llm_model.id, self.tenancy,
+                    META_SYSTEM_PROMPT, meta_prompt,
+                    temperature=0.2, max_tokens=600,
+                ):
+                    full_text_parts.append(chunk)
+                    yield ("token", chunk)
+            except Exception as e:
+                err = f"\n\n[ERRO LLM: {type(e).__name__}: {e}]"
+                full_text_parts.append(err)
+                yield ("token", err)
+            resp.answer = "".join(full_text_parts).strip()
+            resp.refused = False
+            resp.confidence = 0.9
+            resp.refusal_reason = "meta_conversa"  # marcador
+            resp.sources = []
+            resp.elapsed_ms = int((time.time() - t0) * 1000)
+            yield ("done", resp)
+            return
+
         # Pré-checagens (mesmas)
         if history:
             effective_query, was_rewritten = self._maybe_rewrite_query(query, history)
@@ -1105,6 +1243,35 @@ class RAGAgent:
                    original_query: str | None = None) -> AgentResponse:
         t0 = time.time()
         resp = AgentResponse(query=original_query or query, answer="")
+
+        # Camada 0 — classificador de intenção (consistente com _do_answer_stream).
+        intent = classify_intent(query, has_history=bool(history))
+        if intent == "chitchat":
+            resp.answer = chitchat_response(query)
+            resp.refused = False
+            resp.confidence = 1.0
+            resp.refusal_reason = "chitchat"
+            resp.elapsed_ms = int((time.time() - t0) * 1000)
+            return resp
+        if intent == "meta" and history:
+            meta_prompt = build_meta_prompt(query, history)
+            try:
+                answer = llm_generate_cohere(
+                    self.inf, self.llm_model.id, self.tenancy,
+                    META_SYSTEM_PROMPT, meta_prompt,
+                    temperature=0.2, max_tokens=600,
+                )
+                resp.answer = answer.strip()
+                resp.refused = False
+                resp.confidence = 0.9
+                resp.refusal_reason = "meta_conversa"
+            except Exception as e:
+                resp.refused = True
+                resp.refusal_reason = "erro_llm"
+                resp.answer = f"Erro ao gerar resposta meta: {type(e).__name__}: {e}"
+            resp.sources = []
+            resp.elapsed_ms = int((time.time() - t0) * 1000)
+            return resp
 
         # Camada 1 — temporal
         ok, reason = check_temporal(query)
