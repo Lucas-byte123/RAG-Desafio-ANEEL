@@ -27,6 +27,8 @@ bge_warmup.log
 *.jpg
 *.jpeg
 Captura\ de\ tela*
+# Exceção: screenshots da aplicação que ilustram o README
+!docs/screenshots/*.png
 
 # Editores e SO
 .vscode/

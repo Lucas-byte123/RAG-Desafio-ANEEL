@@ -14,6 +14,28 @@ vantagem técnica.
 > reprodução completa do pipeline (download de 27k PDFs → extração → embedding)
 > leva ~18h de wall-clock e está documentado na seção "Rebuildar o banco do zero".
 
+> **👤 Avaliador?** Leia o **[`AVALIACAO.md`](AVALIACAO.md)** — guia rápido com
+> queries sugeridas, métricas, queries-trap pra testar honestidade do agente,
+> e limitações conhecidas (transparência).
+
+---
+
+## 📸 Screenshots da aplicação
+
+**Tela inicial** — sugestões clicáveis, status do BGE, sidebar com arquitetura:
+
+![Tela inicial](docs/screenshots/01-home.png)
+
+**Resposta com fontes** — query "O que é a tarifa branca?" responde com 5
+fontes citadas via `[FONTE: REN 733/2016, pg.1]`, confiança 75%, latência ~30s:
+
+![Resposta tarifa branca](docs/screenshots/02-tarifa-branca.png)
+
+**Recusa de off-topic** — query "qual a altura do neymar?" é recusada via
+guardrail (camada 5a, rerank early-exit), com mensagem clara sobre escopo:
+
+![Recusa off-topic](docs/screenshots/03-recusa-offtopic.png)
+
 ---
 
 ## 🌐 Demo ao vivo

@@ -38,6 +38,10 @@ WALLET_PASS_FILE = ROOT / ".secrets" / "wallet.pass"
 DSN = "aneelrag_medium"
 USER = "ADMIN"
 
+# Logger module-level pra eventos de funções standalone (rerank, bge load, etc).
+# Funções de classe usam self._jlog. Esse logger compartilha o mesmo arquivo JSONL.
+_module_jlog = JsonLogger(ROOT / "logs" / "agent.jsonl")
+
 ANOS_COBERTOS = {2016, 2021, 2022}
 
 # Configuração dos guardrails
@@ -665,6 +669,9 @@ def rerank_cohere(inf, model_id, tenancy, query: str,
             out.append(c)
         return out
     except Exception as e:
+        _module_jlog.log("rerank_cohere_failed",
+                         error_type=type(e).__name__, error=str(e)[:300],
+                         fallback="fusion_score", chunks_returned=min(top_n, len(chunks)))
         print(f"  [rerank cohere falhou: {type(e).__name__}] usando fusion score", file=sys.stderr)
         return chunks[:top_n]
 
@@ -683,13 +690,17 @@ def get_bge_reranker():
             return _bge_reranker_cache
         try:
             from sentence_transformers import CrossEncoder
+            _module_jlog.log("bge_loading", model="BAAI/bge-reranker-v2-m3", max_length=256)
             print("  [bge] carregando BAAI/bge-reranker-v2-m3 (1ª vez ~3min download)...", file=sys.stderr)
             # max_length=256 (em vez de 512) — 2x mais rápido sem perda significativa de qualidade
             # nossa text_embed média é 1037 chars (~260 tokens), bem coberta por 256
             _bge_reranker_cache = CrossEncoder("BAAI/bge-reranker-v2-m3", max_length=256)
+            _module_jlog.log("bge_loaded", model="BAAI/bge-reranker-v2-m3", max_length=256)
             print("  [bge] reranker carregado (max_length=256)", file=sys.stderr)
             return _bge_reranker_cache
         except Exception as e:
+            _module_jlog.log("bge_load_failed",
+                             error_type=type(e).__name__, error=str(e)[:300])
             print(f"  [bge] indisponível ({type(e).__name__}: {e})", file=sys.stderr)
             return None
 
@@ -713,6 +724,9 @@ def rerank_bge(query: str, chunks: list[RetrievedChunk],
             out.append(c)
         return out
     except Exception as e:
+        _module_jlog.log("rerank_bge_failed",
+                         error_type=type(e).__name__, error=str(e)[:300],
+                         fallback="fusion_score", chunks_returned=min(top_n, len(chunks)))
         print(f"  [bge rerank falhou: {type(e).__name__}] usando fusion score", file=sys.stderr)
         return chunks[:top_n]
 
