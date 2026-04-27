@@ -273,12 +273,25 @@ def is_query_vague(query: str) -> bool:
 # Roda antes do retrieval pra evitar 30s de pipeline em "obrigado", "ok", "explica melhor".
 
 _CHITCHAT_PATTERNS = [
+    # saudações
     re.compile(r"^\s*(oi|olá|ola|hey|hi|hello|e a[ií]|opa)[!.\s,?]*$", re.IGNORECASE),
-    re.compile(r"^\s*(obrigad[oa]|valeu|vlw|tks|thanks|agrade[cç]o)[!.\s,?]*$", re.IGNORECASE),
-    re.compile(r"^\s*(ok|certo|beleza|legal|entendi|entendido|perfeito|[óo]timo|massa|joia)[!.\s,?]*$", re.IGNORECASE),
+    # agradecimentos
+    re.compile(r"^\s*(obrigad[oa]|muito obrigad[oa]|valeu|vlw|tks|thanks|agrade[cç]o|grato|grata)[!.\s,?]*$", re.IGNORECASE),
+    # confirmação curta
+    re.compile(r"^\s*(ok|okay|certo|t[áa] certo|beleza|blz|legal|entendi|entendido|saquei|t[áa]|sim|claro)[!.\s,?]*$", re.IGNORECASE),
+    # elogios à resposta — adicionados após feedback de usuário
+    re.compile(r"^\s*(perfeito|[óo]timo|[óo]tima|[óo]tima resposta|excelente|excelente resposta|massa|joia|j[óo]ia|show|show de bola|top|mt top|muito top|demais|sensacional|maravilha|maravilhoso|excelent[íi]ssim[oa])[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(bom|bom demais|muito bom|mt bom|mto bom|muito boa|mt boa|mto boa|boa|bo[ãa]o|bem)[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(parab[ée]ns|parabens|isso a[íi]|isso mesmo|isso|exato|exatamente|correto|corret[íi]ssimo|preciso)[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(ficou (bom|[óo]timo|excelente|claro|perfeito))[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(gostei|adorei|amei|curti|achei (bom|[óo]timo|excelente))[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(funcionou|deu certo|resolvido|resolveu|ajudou|me ajudou)[!.\s,?]*$", re.IGNORECASE),
+    # cumprimentos
     re.compile(r"^\s*(bom dia|boa tarde|boa noite)[!.\s,?]*$", re.IGNORECASE),
-    re.compile(r"^\s*(tchau|at[ée] (mais|logo)|fui|valeu então)[!.\s,?]*$", re.IGNORECASE),
-    re.compile(r"^\s*(tudo bem|td bem|como vai|como está)[?!.\s,]*$", re.IGNORECASE),
+    # despedidas
+    re.compile(r"^\s*(tchau|at[ée] (mais|logo|breve)|fui|valeu então|valew|falou|abra[çc]o)[!.\s,?]*$", re.IGNORECASE),
+    # social
+    re.compile(r"^\s*(tudo bem|td bem|tudo certo|td certo|como vai|como est[áa]|de boa)[?!.\s,]*$", re.IGNORECASE),
 ]
 
 _META_PATTERNS = [
@@ -324,6 +337,7 @@ _CHITCHAT_RESPONSES = {
         "anos 2016, 2021 e 2022). Em que posso ajudar?"
     ),
     "agradecimento": "De nada! Se tiver outra dúvida sobre legislação ANEEL, é só perguntar.",
+    "elogio": "Obrigado, fico feliz que ajudou! Pode mandar mais perguntas sobre legislação ANEEL quando quiser.",
     "confirmacao": "Tudo certo. Posso esclarecer mais alguma coisa sobre legislação ANEEL?",
     "despedida": "Até mais. Bom uso da informação regulatória.",
     "default": "Estou aqui pra responder dúvidas sobre legislação da ANEEL. Pode perguntar.",
@@ -332,13 +346,16 @@ _CHITCHAT_RESPONSES = {
 
 def chitchat_response(query: str) -> str:
     q = query.lower().strip()
-    if re.match(r"^\s*(oi|olá|ola|hey|hi|hello|e a[ií]|opa|bom dia|boa tarde|boa noite|tudo bem|td bem|como vai)", q):
+    if re.match(r"^\s*(oi|olá|ola|hey|hi|hello|e a[ií]|opa|bom dia|boa tarde|boa noite|tudo bem|td bem|como vai|de boa)", q):
         return _CHITCHAT_RESPONSES["saudacao"]
-    if re.match(r"^\s*(obrigad|valeu|vlw|tks|thanks|agrade)", q):
+    if re.match(r"^\s*(obrigad|muito obrigad|valeu|vlw|tks|thanks|agrade|grato|grata)", q):
         return _CHITCHAT_RESPONSES["agradecimento"]
-    if re.match(r"^\s*(tchau|at[eé]|fui)", q):
+    if re.match(r"^\s*(tchau|at[eé]|fui|valew|falou|abra[çc]o)", q):
         return _CHITCHAT_RESPONSES["despedida"]
-    if re.match(r"^\s*(ok|certo|beleza|legal|entendi|entendido|perfeito|[óo]timo|massa|joia)", q):
+    # Elogios à resposta
+    if re.match(r"^\s*(perfeito|[óo]tim[oa]|excelente|massa|j[óo]ia|joia|show|top|demais|sensacional|maravilh|bom|muito bom|mt bom|mto bom|boa|muito boa|mt boa|mto boa|gostei|adorei|amei|curti|parab[ée]ns|isso|exato|correto|preciso|ficou|funcionou|deu certo|resolvi|ajudou)", q):
+        return _CHITCHAT_RESPONSES["elogio"]
+    if re.match(r"^\s*(ok|okay|certo|t[áa]|beleza|blz|legal|entendi|entendido|saquei|sim|claro)", q):
         return _CHITCHAT_RESPONSES["confirmacao"]
     return _CHITCHAT_RESPONSES["default"]
 
