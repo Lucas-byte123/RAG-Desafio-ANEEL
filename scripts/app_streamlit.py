@@ -24,7 +24,14 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from rag_agent import RAGAgent, AgentResponse, MAX_HISTORY_TURNS
+from rag_agent import RAGAgent, AgentResponse, MAX_HISTORY_TURNS, classify_intent
+
+SUGESTOES = [
+    "O que é a tarifa branca?",
+    "Quem é o Diretor-Geral da ANEEL?",
+    "Como funciona a microgeração distribuída?",
+    "Qual o procedimento para reclamar da distribuidora?",
+]
 
 st.set_page_config(
     page_title="RAG ANEEL",
@@ -84,16 +91,36 @@ except Exception as e:
     st.error(f"Erro ao inicializar agente: {e}")
     st.stop()
 
-# Indicador de aquecimento do bge (módulo já importado no topo)
+# Indicador discreto de aquecimento do bge (módulo já importado no topo)
 import rag_agent as _ragmod
-if _ragmod._bge_reranker_cache is None and hasattr(agent, '_bge_warmup_thread') and agent._bge_warmup_thread.is_alive():
-    st.info("⏳ Modelo de re-ranking aquecendo em segundo plano (~30s na 1ª vez). "
-            "Pode fazer perguntas normalmente; a 1ª query talvez espere o aquecimento terminar.")
+_bge_warming = (
+    _ragmod._bge_reranker_cache is None
+    and hasattr(agent, '_bge_warmup_thread')
+    and agent._bge_warmup_thread.is_alive()
+)
 
 
 # ---- Cabeçalho ----
-st.title("Agente RAG — Legislação ANEEL")
-st.caption("Pergunte sobre legislação do setor elétrico (2016, 2021, 2022). O agente cita fontes e mantém contexto da conversa.")
+col_title, col_status = st.columns([5, 1])
+with col_title:
+    st.title("Agente RAG — Legislação ANEEL")
+    st.caption("Legislação do setor elétrico (2016, 2021, 2022). Cita fontes e mantém contexto da conversa.")
+with col_status:
+    if _bge_warming:
+        st.caption("⏳ aquecendo BGE")
+    else:
+        st.caption("⚡ pronto")
+
+
+# ---- Sugestões clicáveis (só na 1ª tela, antes de qualquer mensagem) ----
+if not st.session_state.messages:
+    st.markdown("**Algumas perguntas pra começar:**")
+    cols_sug = st.columns(2)
+    for i, sug in enumerate(SUGESTOES):
+        with cols_sug[i % 2]:
+            if st.button(sug, key=f"sug_{i}", use_container_width=True):
+                st.session_state.pending_query = sug
+                st.rerun()
 
 
 # ---- Renderizar histórico ----
@@ -125,8 +152,12 @@ for idx, m in enumerate(st.session_state.messages):
                         st.caption(f"🔄 reformulado")
 
 
-# ---- Input do usuário ----
-if prompt := st.chat_input("Pergunte sobre legislação ANEEL..."):
+# ---- Input do usuário (chat OU clique em sugestão) ----
+prompt = st.chat_input("Pergunte sobre legislação ANEEL...")
+if not prompt and st.session_state.get("pending_query"):
+    prompt = st.session_state.pop("pending_query")
+
+if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
 
     with st.chat_message("user"):
@@ -141,8 +172,17 @@ if prompt := st.chat_input("Pergunte sobre legislação ANEEL..."):
         status_placeholder = st.empty()
         answer_placeholder = st.empty()
 
+        # Status visual diferenciado por intenção (cheap, rodado local)
+        intent = classify_intent(prompt, has_history=bool(history_before))
+        if intent == "chitchat":
+            initial_status = "💬 _Conversa..._"
+        elif intent == "meta":
+            initial_status = "💬 _Respondendo no contexto da conversa (sem buscar na base)..._"
+        else:
+            initial_status = "🔍 _Buscando na base..._"
+
         try:
-            status_placeholder.markdown("🔍 _Buscando na base..._")
+            status_placeholder.markdown(initial_status)
             buf = []
 
             for evt, payload in agent.answer_stream(prompt, history=history_before):
@@ -150,7 +190,8 @@ if prompt := st.chat_input("Pergunte sobre legislação ANEEL..."):
                     meta_resp = payload
                     if payload.rewritten_query:
                         st.info(f"🔄 Reformulado para busca: _{payload.rewritten_query}_")
-                    status_placeholder.markdown("✍️ _Gerando resposta..._")
+                    if intent == "real_question":
+                        status_placeholder.markdown("✍️ _Gerando resposta..._")
                 elif evt == "token":
                     buf.append(payload)
                     answer_placeholder.markdown("".join(buf))
@@ -177,7 +218,13 @@ if prompt := st.chat_input("Pergunte sobre legislação ANEEL..."):
             st.error(f"Erro: {type(e).__name__}: {e}")
             final_resp = AgentResponse(query=prompt, answer=f"Erro interno: {e}", refused=True)
 
-        # Fontes em expander
+        # Badge específico pra meta-conversa
+        if final_resp.refusal_reason == "meta_conversa":
+            st.caption("💬 Resposta com base no histórico da conversa (sem nova consulta à base).")
+        elif final_resp.refusal_reason == "chitchat":
+            pass  # silencioso, já é óbvio que é conversa
+
+        # Fontes em expander (só pra perguntas reais)
         if final_resp.sources and not final_resp.refused:
             with st.expander(f"📚 Fontes consultadas ({len(final_resp.sources)})"):
                 for i, s in enumerate(final_resp.sources, start=1):
