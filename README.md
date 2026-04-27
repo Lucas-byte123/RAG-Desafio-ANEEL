@@ -14,6 +14,9 @@ vantagem técnica.
 > reprodução completa do pipeline (download de 27k PDFs → extração → embedding)
 > leva ~18h de wall-clock e está documentado na seção "Rebuildar o banco do zero".
 
+> **📁 Material da apresentação:** ver [`apresentacao/`](apresentacao/) — briefing
+> das escolhas técnicas (Q&A), slides, roteiro de fala e roteiro da demo ao vivo.
+
 ---
 
 ## 🌐 Demo ao vivo
