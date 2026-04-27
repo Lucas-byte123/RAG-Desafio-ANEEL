@@ -64,9 +64,9 @@ cd RAG-Desafio-ANEEL
 ```
 
 **Arquivos chave** (ordem de importância):
-- `scripts/rag_agent.py` (1300 linhas) — coração do agente: 5 guardrails,
-  classificador de intenção, retrieval híbrido (vector + BM25 + RRF +
-  bge-reranker), system prompt, streaming
+- `scripts/rag_agent.py` (1500 linhas) — coração do agente: classificador de
+  intenção, 5 guardrails, retrieval híbrido (vector + BM25 + RRF +
+  bge-reranker), cache LRU, system prompt, streaming
 - `scripts/app_streamlit.py` — UI com sugestões clicáveis, status diferenciado
   por intenção, fontes expansíveis
 - `scripts/extract_text.py` + `scripts/chunker.py` — pipeline de ingestão
@@ -74,10 +74,93 @@ cd RAG-Desafio-ANEEL
 - `scripts/eval_runner.py` + `scripts/eval_dataset.py` — eval reproduzível
 - `DEPLOY.md` — runbook de produção (Caddy + systemd hardened + SELinux)
 
-**Importante:** rodar localmente **exige credenciais OCI próprias** (Autonomous
-Database 23ai populado com 250k vetores + chave de OCI Generative AI). Sem
-elas, a UI sobe mas todas as queries retornam erro de conexão. Pra avaliar
-funcionalidade, use a **demo ao vivo** acima.
+**Importante:** rodar **com banco populado** exige credenciais OCI próprias
+(Autonomous Database 23ai com 250k vetores + chave de OCI Generative AI).
+Pra avaliar funcionalidade, use a **demo ao vivo** acima.
+
+### 3.1 — Comandos pra rodar SEM credenciais OCI (apenas validação de código)
+
+```bash
+# Smoke test de sintaxe + estrutura (não precisa de credenciais)
+python -m py_compile scripts/rag_agent.py
+python -m py_compile scripts/app_streamlit.py
+python -m py_compile scripts/eval_runner.py
+
+# Verifica que o eval dataset tem 25 queries em 4 categorias
+python -c "
+import sys; sys.path.insert(0, 'scripts')
+from eval_dataset import EVAL_DATASET
+from collections import Counter
+print(f'Total: {len(EVAL_DATASET)} queries')
+print('Por categoria:', dict(Counter(q['category'] for q in EVAL_DATASET)))
+"
+# Categorias possíveis: factual_numerica, definicao, processo, borderline, off_topic
+
+# Verifica CI rodando no GitHub
+# https://github.com/Lucas-byte123/RAG-Desafio-ANEEL/actions
+```
+
+### 3.2 — Comandos pra rodar COM credenciais OCI (validação completa)
+
+Pré-requisitos:
+- Python 3.11+
+- Oracle Wallet do Autonomous DB descompactado em `.secrets/wallet/`
+- Senha do wallet em `.secrets/wallet.pass`
+- Config OCI em `~/.oci/config` (gerada por `oci setup config`)
+- Banco ATP populado (rodar pipeline de ingestão — ~18h, ver README seção
+  "Rebuildar o banco do zero")
+
+```bash
+# 1. Setup ambiente (~5 min)
+python -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+# .venv\Scripts\activate   # Windows
+pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+
+# 2. Setup variáveis
+cp .env.example .env
+# editar .env: setar DB_ADMIN_PASS=...
+
+# 3. Health check (verifica conexão Oracle + OCI GenAI)
+source .env
+python scripts/health_check.py
+# Output esperado: status=ok com latências de Oracle e OCI
+
+# 4. Eval automático (25 queries, ~8 min, gera inspect/eval_results.json)
+python scripts/eval_runner.py
+# Output esperado:
+# - Refusal accuracy: 25/25 (100%)
+# - Doc match factual: 6/8 (75%)
+# - Reference chunk top-5: 4/6 (67%)
+# - Keyword recall: 48-80% por query
+# - Latência média off-topic: ~1s
+# - Latência média factual: ~30s
+
+# 5. Query individual via CLI
+python scripts/rag_agent.py "Quem é o Diretor-Geral da ANEEL?"
+
+# 6. UI Streamlit local
+python -m streamlit run scripts/app_streamlit.py
+# Abre em http://localhost:8501
+
+# 7. Inspecionar logs estruturados (qualquer momento)
+tail -f logs/agent.jsonl | python -m json.tool
+```
+
+### 3.3 — Rodar via Docker (sem instalar Python local)
+
+```bash
+# Pré-requisito: mesmas credenciais OCI da seção 3.2
+# .secrets/wallet/, .secrets/wallet.pass, ~/.oci/config
+
+docker compose up --build
+# Build inicial: ~10 min (torch CPU + bge cache pré-baixado)
+# Subsequentes: ~30s
+
+# Streamlit:        http://localhost:8501
+# Health JSON:      http://localhost:8502/health
+```
 
 ---
 

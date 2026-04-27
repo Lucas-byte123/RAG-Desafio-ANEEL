@@ -1,5 +1,12 @@
 # RAG ANEEL — Agente de Consulta a Legislação do Setor Elétrico
 
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/Lucas-byte123/RAG-Desafio-ANEEL/actions/workflows/ci.yml/badge.svg)](https://github.com/Lucas-byte123/RAG-Desafio-ANEEL/actions/workflows/ci.yml)
+[![Demo ao vivo](https://img.shields.io/badge/demo-online-brightgreen.svg)](https://137-131-141-27.nip.io/)
+[![Oracle 23ai](https://img.shields.io/badge/Oracle-23ai_Vector-red.svg)](https://www.oracle.com/database/23ai/)
+[![Cohere](https://img.shields.io/badge/Cohere-Command_R%2B-purple.svg)](https://cohere.com/)
+
 Agente RAG (Retrieval-Augmented Generation) sobre **27.025 PDFs** da legislação da
 **ANEEL** (Agência Nacional de Energia Elétrica) — anos **2016, 2021 e 2022**.
 
@@ -36,6 +43,16 @@ guardrail (camada 5a, rerank early-exit), com mensagem clara sobre escopo:
 
 ![Recusa off-topic](docs/screenshots/03-recusa-offtopic.png)
 
+**Chitchat instantâneo** — "obrigado!" reconhece como conversa, responde em
+**0ms** sem chamar pipeline (classificador de intenção):
+
+![Chitchat 0ms](docs/screenshots/04-chitchat.png)
+
+**Meta-conversa rápida** — "explica melhor" depois de uma pergunta usa só
+o histórico, em **3s** (vs 30s do pipeline normal), com badge claro:
+
+![Meta-conversa](docs/screenshots/05-meta-conversa.png)
+
 ---
 
 ## 🌐 Demo ao vivo
@@ -53,12 +70,45 @@ Endpoint válido até **2026-05-25** (fim do crédito promocional OCI).
 
 ## Arquitetura
 
+### Pipeline de ingestão (rodou 1x, ~18h wall-clock)
+
+```mermaid
+flowchart LR
+    A[27k PDFs ANEEL] --> B[downloader<br/>httpx async]
+    B --> C[Object Storage<br/>OCI]
+    C --> D[extract_text<br/>PyMuPDF + pdfplumber]
+    D --> E[chunker<br/>Parent-Child]
+    E --> F[embed_index<br/>Cohere v3 OCI]
+    F --> G[(Oracle 23ai<br/>HNSW + BM25)]
+
+    style G fill:#ff6b35,color:#fff
+    style F fill:#9b59b6,color:#fff
 ```
-PDF (27k)  →  extract_text  →  chunker (Parent-Child)  →  embed (Cohere)  →  Oracle 23ai
-                                                                                ↓
-                                                                       HNSW + Text BM25
-                                                                                ↓
-   query  →  guardrails  →  vector + BM25  →  RRF  →  bge-rerank  →  Cohere R+  →  resposta
+
+### Pipeline de runtime (por query)
+
+```mermaid
+flowchart TD
+    Q[query do usuário] --> CL[classificador intenção]
+    CL -->|chitchat| CC[resposta canned<br/>~0 ms]
+    CL -->|meta-conversa| ME[LLM com histórico<br/>~3 s]
+    CL -->|pergunta real| G1[guardrails 1-2<br/>temporal + escopo]
+    G1 -->|OK| EMB[embedding query<br/>Cohere v3]
+    G1 -->|recusa| R1[recusa rápida ~1 s]
+    EMB --> RET[vector search HNSW<br/>+ BM25 Oracle Text]
+    RET --> RRF[Reciprocal Rank Fusion]
+    RRF --> RR[bge-reranker-v2-m3<br/>local CPU]
+    RR -->|score baixo| R2[recusa pós-rerank]
+    RR -->|score OK| EXP[expand to parents<br/>1 query batch]
+    EXP --> LLM[Cohere Command R+<br/>streaming]
+    LLM --> VAL[validação citação<br/>FONTE: ...]
+    VAL --> RES[resposta final]
+
+    style CC fill:#27ae60,color:#fff
+    style ME fill:#3498db,color:#fff
+    style RES fill:#27ae60,color:#fff
+    style R1 fill:#e74c3c,color:#fff
+    style R2 fill:#e74c3c,color:#fff
 ```
 
 **Componentes:**
