@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    name: Import smoke test (sem credenciais)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install torch CPU-only
+        run: pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install requirements
+        run: pip install -r requirements.txt
+
+      - name: Smoke test — sintaxe e imports
+        run: |
+          python -m py_compile scripts/rag_agent.py
+          python -m py_compile scripts/app_streamlit.py
+          python -m py_compile scripts/health_server.py
+          python -m py_compile scripts/eval_runner.py
+          python -m py_compile scripts/eval_dataset.py
+          python -c "import ast; ast.parse(open('scripts/rag_agent.py', encoding='utf-8').read())"
+
+      - name: Smoke test — importa módulos sem rede
+        run: |
+          # Não importa rag_agent direto pq ele tenta abrir OCI config no import.
+          # Em vez disso, valida que dataclasses + funções puras importam.
+          python -c "
+          import sys; sys.path.insert(0, 'scripts')
+          from eval_dataset import EVAL_DATASET
+          assert len(EVAL_DATASET) >= 20, f'eval dataset menor que esperado: {len(EVAL_DATASET)}'
+          print(f'✓ {len(EVAL_DATASET)} queries no eval dataset')
+          "
+
+      - name: Verifica ausência de segredos no código
+        run: |
+          # Falha se algum segredo conhecido escapou pro código
+          ! grep -rE "DB_ADMIN_PASS\s*=\s*['\"][^'\"]+['\"]" scripts/ || (echo "ERRO: senha hardcoded" && exit 1)
+          ! grep -rE "ocid1\.tenancy\.oc1\.\.[a-z0-9]{40,}" scripts/ || (echo "ERRO: OCID em código" && exit 1)

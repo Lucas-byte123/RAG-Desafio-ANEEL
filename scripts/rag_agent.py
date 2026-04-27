@@ -529,12 +529,14 @@ def rrf_fuse(vector_results: list[RetrievedChunk], bm25_results: list[RetrievedC
 
 
 def extract_filters_from_query(query: str) -> dict:
+    """Extrai filtros (ano) da query. Só filtra por ano quando há exatamente UM
+    ano coberto na query — queries com múltiplos anos ("compare 2016 e 2021")
+    NÃO filtram, pra não eliminar chunks de outros anos do retrieval."""
     filters = {}
-    years = YEAR_RE.findall(query)
-    if years:
-        y = int(re.findall(r"\b(?:19|20)\d{2}\b", query)[0])
-        if y in ANOS_COBERTOS:
-            filters["ano"] = y
+    all_years = re.findall(r"\b(?:19|20)\d{2}\b", query)
+    covered_years = {int(y) for y in all_years if int(y) in ANOS_COBERTOS}
+    if len(covered_years) == 1:
+        filters["ano"] = next(iter(covered_years))
     if re.search(r"resolu[cç][aã]o\s+normativa|\bren\b", query, re.IGNORECASE):
         pass  # podemos filtrar por tipo_canonico mas o vocabulário ainda não tá 100% limpo
     return filters
@@ -1042,13 +1044,16 @@ class RAGAgent:
 
     def _expand_to_parents(self, cur, children: list[RetrievedChunk]) -> list[RetrievedChunk]:
         """Small-to-Big: substitui cada child pelo seu parent pra mais contexto ao LLM.
-        Dedupe por parent_id (vários children do mesmo parent → 1 parent)."""
+        Dedupe por parent_id (vários children do mesmo parent → 1 parent só)."""
         seen_parents = set()
         out = []
         for c in children:
-            if not c.parent_chunk_id or c.parent_chunk_id in seen_parents:
-                if c.parent_chunk_id not in seen_parents:
-                    out.append(c)
+            if not c.parent_chunk_id:
+                # Chunk órfão (sem parent): inclui o próprio chunk
+                out.append(c)
+                continue
+            if c.parent_chunk_id in seen_parents:
+                # Parent já adicionado por outro child — pula sem perder slot
                 continue
             seen_parents.add(c.parent_chunk_id)
             cur.execute("""
