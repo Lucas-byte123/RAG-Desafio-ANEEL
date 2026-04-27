@@ -36,3 +36,6 @@ Captura\ de\ tela*
 *.swp
 .DS_Store
 Thumbs.db
+
+# Material de apresentação (privado, fica só local)
+apresentacao/
