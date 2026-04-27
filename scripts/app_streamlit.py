@@ -172,14 +172,19 @@ if prompt:
         status_placeholder = st.empty()
         answer_placeholder = st.empty()
 
-        # Status visual diferenciado por intenção (cheap, rodado local)
-        intent = classify_intent(prompt, has_history=bool(history_before))
-        if intent == "chitchat":
+        # Estimativa rápida de intent só pra status inicial (regex local barata).
+        # O agent re-classifica via embedding semântico e nos manda evento "intent"
+        # com o resultado real — UI atualiza quando chegar.
+        intent_initial = classify_intent(prompt, has_history=bool(history_before))
+        if intent_initial == "chitchat":
             initial_status = "💬 _Conversa..._"
-        elif intent == "meta":
+        elif intent_initial == "meta":
             initial_status = "💬 _Respondendo no contexto da conversa (sem buscar na base)..._"
         else:
-            initial_status = "🔵 _Iniciando..._"
+            initial_status = "💭 _Analisando..._"
+
+        # Vai ser atualizado quando o agent emitir evento "intent".
+        intent = intent_initial
 
         # Mapeamento de phase → texto visual + emoji + step
         # 5 etapas pra dar sensação de progresso durante os ~30s do pipeline
@@ -196,7 +201,16 @@ if prompt:
             buf = []
 
             for evt, payload in agent.answer_stream(prompt, history=history_before):
-                if evt == "phase":
+                if evt == "intent":
+                    # Classificação real (após embedding semântico) — atualiza status
+                    intent = payload
+                    if intent == "chitchat":
+                        status_placeholder.markdown("💬 _Conversa..._")
+                    elif intent == "meta":
+                        status_placeholder.markdown("💬 _Respondendo no contexto da conversa (sem buscar na base)..._")
+                    else:
+                        status_placeholder.markdown("🔍 _Buscando na base..._")
+                elif evt == "phase":
                     if intent == "real_question":
                         emoji, label = PHASE_LABELS.get(payload, ("⏳", payload))
                         status_placeholder.markdown(f"{emoji} _{label}_")

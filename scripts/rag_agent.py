@@ -272,27 +272,71 @@ def is_query_vague(query: str) -> bool:
 # Classificador de intenção: chitchat / meta-conversa / pergunta real.
 # Roda antes do retrieval pra evitar 30s de pipeline em "obrigado", "ok", "explica melhor".
 
+# Regex MÍNIMA pra casos triviais (~0ms). O resto é classificado por similarity
+# de embedding (ver _classify_intent_semantic). Princípio: lista pequena, fixa,
+# que captura saudação/agradecimento/despedida óbvios. Variações coloquiais
+# (bom demais, show de bola, fera, irado, etc) não entram aqui — vão pelo
+# embedding semântico, que captura SIGNIFICADO, não texto literal.
 _CHITCHAT_PATTERNS = [
-    # saudações
-    re.compile(r"^\s*(oi|olá|ola|hey|hi|hello|e a[ií]|opa)[!.\s,?]*$", re.IGNORECASE),
-    # agradecimentos
-    re.compile(r"^\s*(obrigad[oa]|muito obrigad[oa]|valeu|vlw|tks|thanks|agrade[cç]o|grato|grata)[!.\s,?]*$", re.IGNORECASE),
-    # confirmação curta
-    re.compile(r"^\s*(ok|okay|certo|t[áa] certo|beleza|blz|legal|entendi|entendido|saquei|t[áa]|sim|claro)[!.\s,?]*$", re.IGNORECASE),
-    # elogios à resposta — adicionados após feedback de usuário
-    re.compile(r"^\s*(perfeito|[óo]timo|[óo]tima|[óo]tima resposta|excelente|excelente resposta|massa|joia|j[óo]ia|show|show de bola|top|mt top|muito top|demais|sensacional|maravilha|maravilhoso|excelent[íi]ssim[oa])[!.\s,?]*$", re.IGNORECASE),
-    re.compile(r"^\s*(bom|bom demais|muito bom|mt bom|mto bom|muito boa|mt boa|mto boa|boa|bo[ãa]o|bem)[!.\s,?]*$", re.IGNORECASE),
-    re.compile(r"^\s*(parab[ée]ns|parabens|isso a[íi]|isso mesmo|isso|exato|exatamente|correto|corret[íi]ssimo|preciso)[!.\s,?]*$", re.IGNORECASE),
-    re.compile(r"^\s*(ficou (bom|[óo]timo|excelente|claro|perfeito))[!.\s,?]*$", re.IGNORECASE),
-    re.compile(r"^\s*(gostei|adorei|amei|curti|achei (bom|[óo]timo|excelente))[!.\s,?]*$", re.IGNORECASE),
-    re.compile(r"^\s*(funcionou|deu certo|resolvido|resolveu|ajudou|me ajudou)[!.\s,?]*$", re.IGNORECASE),
-    # cumprimentos
-    re.compile(r"^\s*(bom dia|boa tarde|boa noite)[!.\s,?]*$", re.IGNORECASE),
-    # despedidas
-    re.compile(r"^\s*(tchau|at[ée] (mais|logo|breve)|fui|valeu então|valew|falou|abra[çc]o)[!.\s,?]*$", re.IGNORECASE),
-    # social
-    re.compile(r"^\s*(tudo bem|td bem|tudo certo|td certo|como vai|como est[áa]|de boa)[?!.\s,]*$", re.IGNORECASE),
+    re.compile(r"^\s*(oi|olá|ola|hey|hi|hello|e a[ií]|opa|bom dia|boa tarde|boa noite)[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(obrigad[oa]|muito obrigad[oa]|valeu|vlw|tks|thanks|grato|grata)[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(tchau|at[ée] (mais|logo|breve)|fui)[!.\s,?]*$", re.IGNORECASE),
+    re.compile(r"^\s*(ok|okay|certo|beleza|blz|sim|claro)[!.\s,?]*$", re.IGNORECASE),
 ]
+
+
+# Exemplos canônicos por categoria — usados no classificador semântico via
+# embedding similarity. Cobrem variações coloquiais sem precisar regex pra cada.
+_INTENT_EXAMPLES = {
+    "chitchat": [
+        # elogios genéricos
+        "muito bom",
+        "bom demais",
+        "ótima resposta",
+        "ficou perfeito",
+        "show de bola",
+        "isso aí",
+        "exatamente",
+        "parabéns pela resposta",
+        "gostei muito",
+        "ajudou bastante",
+        "adorei",
+        "irado",
+        "fera",
+        "massa demais",
+        # confirmações elaboradas
+        "entendi tudo",
+        "ficou claro agora",
+        "saquei",
+        "deu certo",
+        "funcionou",
+        # agradecimentos elaborados
+        "muito obrigado pela ajuda",
+        "agradeço a explicação",
+    ],
+    "meta": [
+        "explica melhor",
+        "pode repetir",
+        "elabore um pouco mais",
+        "resume isso",
+        "não entendi direito",
+        "diga novamente",
+        "qual foi a última pergunta",
+        "o que você falou antes",
+        "continue",
+        "prossiga",
+    ],
+    "real_question": [
+        "como funciona a tarifa branca",
+        "qual a definição de microgeração distribuída",
+        "quem é o Diretor-Geral da ANEEL",
+        "o que é PLD",
+        "como reclamar da distribuidora",
+        "qual o procedimento de revisão de fatura",
+        "quanto custa a tarifa social",
+        "o que mudou na geração distribuída",
+    ],
+}
 
 _META_PATTERNS = [
     re.compile(r"\b(pode|poderia|consegue) repetir\b", re.IGNORECASE),
@@ -340,7 +384,11 @@ _CHITCHAT_RESPONSES = {
     "elogio": "Obrigado, fico feliz que ajudou! Pode mandar mais perguntas sobre legislação ANEEL quando quiser.",
     "confirmacao": "Tudo certo. Posso esclarecer mais alguma coisa sobre legislação ANEEL?",
     "despedida": "Até mais. Bom uso da informação regulatória.",
-    "default": "Estou aqui pra responder dúvidas sobre legislação da ANEEL. Pode perguntar.",
+    # Default = mensagem amigável pra qualquer chitchat que chegou via embedding
+    # mas não casou regex específica (ex: "fera!", "irado", "massa demais").
+    # Como os exemplos canônicos de chitchat são todos elogios/agradecimentos/
+    # confirmações, é razoável assumir que é positivo.
+    "default": "Obrigado pelo retorno! Se tiver outra dúvida sobre legislação ANEEL, é só perguntar.",
 }
 
 
@@ -1010,6 +1058,13 @@ class RAGAgent:
 
         self.conn = connect_db()
 
+        # Logger estruturado JSONL (1 linha por requisição) — antes de qualquer log
+        self._jlog = JsonLogger(ROOT / "logs" / "agent.jsonl")
+        self._jlog.log("agent_init",
+                       embed_model=self.embed_model.display_name,
+                       llm_model=self.llm_model.display_name,
+                       rerank_model=self.rerank_model.display_name if self.rerank_model else None)
+
         # Cache LRU de respostas (query+history → AgentResponse)
         # Acelera re-execução da mesma query (warmup, demos, debug repetitivo)
         from collections import OrderedDict
@@ -1017,22 +1072,120 @@ class RAGAgent:
         self._response_cache_lock = _threading.Lock()
         self._response_cache_max = 64
 
+        # Pré-computa embeddings dos exemplos canônicos pra classificação semântica
+        # em background (não bloqueia init / 1ª query). Se falhar, regex-only.
+        self._intent_centroids: dict = {}
+
+        def _load_centroids():
+            try:
+                import numpy as np
+                centroids = {}
+                for category, examples in _INTENT_EXAMPLES.items():
+                    vectors = []
+                    for ex in examples:
+                        try:
+                            v = embed_query(self.inf, self.embed_model.id, self.tenancy, ex)
+                            vectors.append(np.array(v, dtype="float32"))
+                        except Exception:
+                            continue
+                    if vectors:
+                        centroid = np.mean(np.stack(vectors), axis=0)
+                        norm = np.linalg.norm(centroid)
+                        if norm > 0:
+                            centroid = centroid / norm
+                        centroids[category] = centroid
+                self._intent_centroids = centroids
+                self._jlog.log("intent_centroids_loaded",
+                               categories=list(centroids.keys()),
+                               total_examples=sum(len(v) for v in _INTENT_EXAMPLES.values()))
+            except Exception as e:
+                self._jlog.log("intent_centroids_failed",
+                               error_type=type(e).__name__, error=str(e)[:300])
+
+        self._centroids_thread = _threading.Thread(target=_load_centroids, daemon=True)
+        self._centroids_thread.start()
+
         # Warm-up do bge em BACKGROUND (não bloqueia init do agent / startup da UI)
         import threading
         self._bge_warmup_thread = threading.Thread(target=get_bge_reranker, daemon=True)
         self._bge_warmup_thread.start()
 
-        # Logger estruturado JSONL (1 linha por requisição)
-        self._jlog = JsonLogger(ROOT / "logs" / "agent.jsonl")
-        self._jlog.log("agent_init",
-                       embed_model=self.embed_model.display_name,
-                       llm_model=self.llm_model.display_name,
-                       rerank_model=self.rerank_model.display_name if self.rerank_model else None)
-
         if verbose:
             print(f"  [init] embed={self.embed_model.display_name}")
             print(f"  [init] llm={self.llm_model.display_name}")
             print(f"  [init] rerank={self.rerank_model.display_name if self.rerank_model else 'NONE'}")
+
+    def _classify_intent_semantic(self, query: str, has_history: bool) -> tuple[str, list | None]:
+        """Classificação híbrida: regex curtíssima primeiro, embedding similarity depois.
+
+        Retorna (intent, embedding_or_None). Embedding é retornado quando precisou
+        ser computado — pra ser reusado pelo retrieval (evita embeddar 2x).
+
+        Princípio:
+        - Casos triviais ('oi', 'obrigado', 'tchau', 'ok') → regex 0ms.
+        - Pra resto, embedda a query e compara cosine similarity contra centróides
+          pré-computados. Captura SIGNIFICADO ('bom demais' ≈ 'muito bom' ≈ 'irado'
+          ≈ centróide chitchat) sem precisar listar cada variação.
+        - Pergunta real (a maioria das queries longas/com termo de domínio) bate
+          forte no centróide real_question — e o embedding feito aqui é REUSADO no
+          retrieval, custo zero extra.
+        """
+        q = query.strip()
+
+        # 1) Regex barata pra casos triviais
+        if len(q.split()) <= 6:
+            for p in _CHITCHAT_PATTERNS:
+                if p.match(q):
+                    return "chitchat", None
+
+        # Meta-conversa (referência ao histórico) — só faz sentido com history
+        if has_history:
+            for p in _META_PATTERNS:
+                if p.search(q):
+                    if has_domain_terms(q) and len(q.split()) > 5:
+                        # query menciona domínio + é longa → real_question
+                        break
+                    return "meta", None
+
+        # 2) Sem centróides (init falhou) → fallback regex-only = real_question
+        if not self._intent_centroids:
+            return "real_question", None
+
+        # 3) Embedding similarity pra capturar coloquiais novos
+        try:
+            import numpy as np
+            qvec = embed_query(self.inf, self.embed_model.id, self.tenancy, query)
+            qarr = np.array(qvec, dtype="float32")
+            qnorm = np.linalg.norm(qarr)
+            if qnorm == 0:
+                return "real_question", qvec
+            qarr = qarr / qnorm
+
+            # cosine similarity contra cada centróide
+            scores = {cat: float(np.dot(qarr, centroid))
+                      for cat, centroid in self._intent_centroids.items()}
+            best_cat = max(scores, key=scores.get)
+            best_score = scores[best_cat]
+            real_score = scores.get("real_question", 0.0)
+
+            # Heurística: precisa ser significativamente melhor que real_question
+            # pra reclassificar (evita falso positivo em pergunta legítima).
+            # Threshold absoluto: 0.55 mínimo (Cohere v3 normalizada).
+            # Margin: 0.05 acima de real_question pra reclassificar.
+            if best_cat != "real_question":
+                if best_score > 0.55 and best_score > real_score + 0.05:
+                    self._jlog.log("intent_semantic", query=query[:100],
+                                   intent=best_cat, scores={k: round(v, 3) for k, v in scores.items()})
+                    return best_cat, qvec
+
+            self._jlog.log("intent_semantic", query=query[:100],
+                           intent="real_question",
+                           scores={k: round(v, 3) for k, v in scores.items()})
+            return "real_question", qvec
+        except Exception as e:
+            self._jlog.log("intent_semantic_failed",
+                           error_type=type(e).__name__, error=str(e)[:200])
+            return "real_question", None
 
     def _cache_key(self, query: str, history: list[dict] | None) -> str:
         """Chave do cache: query normalizada + hash dos últimos 4 turnos."""
@@ -1125,8 +1278,9 @@ class RAGAgent:
             return
 
         # Camada 0 — classificador de intenção (chitchat / meta / real_question).
-        # Evita 30s de pipeline em mensagens conversacionais ("obrigado", "explica melhor").
-        intent = classify_intent(query, has_history=bool(history))
+        # Híbrido: regex barata + embedding semântico. Reusa embedding no retrieval.
+        intent, classified_embedding = self._classify_intent_semantic(query, has_history=bool(history))
+        yield ("intent", intent)  # informa UI antes do pipeline pesado
         if intent == "chitchat":
             resp.answer = chitchat_response(query)
             resp.refused = False
@@ -1203,7 +1357,13 @@ class RAGAgent:
                 embed_text = f"{query_expanded}\n\n{hyde_resp}"
 
         yield ("phase", "embedding")
-        qvec = embed_query(self.inf, self.embed_model.id, self.tenancy, embed_text)
+        # Reusa embedding já computado pelo classificador semântico (se a query
+        # final for igual à classificada). Caso expand_query/HyDE tenha alterado,
+        # o LRU cache de embed_query economiza qualquer trabalho duplicado.
+        if classified_embedding is not None and embed_text.strip() == query.strip():
+            qvec = classified_embedding
+        else:
+            qvec = embed_query(self.inf, self.embed_model.id, self.tenancy, embed_text)
         cur = self.conn.cursor()
         try:
             yield ("phase", "retrieval")
@@ -1464,8 +1624,8 @@ class RAGAgent:
         t0 = time.time()
         resp = AgentResponse(query=original_query or query, answer="")
 
-        # Camada 0 — classificador de intenção (consistente com _do_answer_stream).
-        intent = classify_intent(query, has_history=bool(history))
+        # Camada 0 — classificador de intenção (híbrido: regex + embedding semântico).
+        intent, _ = self._classify_intent_semantic(query, has_history=bool(history))
         if intent == "chitchat":
             resp.answer = chitchat_response(query)
             resp.refused = False
