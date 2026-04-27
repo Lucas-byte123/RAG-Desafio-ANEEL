@@ -906,6 +906,13 @@ class RAGAgent:
 
         self.conn = connect_db()
 
+        # Cache LRU de respostas (query+history → AgentResponse)
+        # Acelera re-execução da mesma query (warmup, demos, debug repetitivo)
+        from collections import OrderedDict
+        self._response_cache: OrderedDict = OrderedDict()
+        self._response_cache_lock = _threading.Lock()
+        self._response_cache_max = 64
+
         # Warm-up do bge em BACKGROUND (não bloqueia init do agent / startup da UI)
         import threading
         self._bge_warmup_thread = threading.Thread(target=get_bge_reranker, daemon=True)
@@ -923,11 +930,44 @@ class RAGAgent:
             print(f"  [init] llm={self.llm_model.display_name}")
             print(f"  [init] rerank={self.rerank_model.display_name if self.rerank_model else 'NONE'}")
 
+    def _cache_key(self, query: str, history: list[dict] | None) -> str:
+        """Chave do cache: query normalizada + hash dos últimos 4 turnos."""
+        import hashlib
+        q_norm = query.lower().strip()
+        if history:
+            recent = history[-8:]  # últimos 4 turnos = 8 mensagens
+            h_str = "|".join(f"{m.get('role','')}:{(m.get('content','') or '')[:200]}" for m in recent)
+            h_hash = hashlib.md5(h_str.encode("utf-8")).hexdigest()[:8]
+        else:
+            h_hash = "none"
+        return f"{q_norm}|{h_hash}"
+
+    def _cache_get(self, key: str):
+        with self._response_cache_lock:
+            if key in self._response_cache:
+                self._response_cache.move_to_end(key)  # LRU: marca como recente
+                return self._response_cache[key]
+            return None
+
+    def _cache_set(self, key: str, resp) -> None:
+        # Não cacheia respostas com erro/refusal pra não fixar comportamento ruim
+        if resp.refused and resp.refusal_reason not in ("chitchat", "meta_conversa",
+                                                        "fora_escopo_temporal", "fora_escopo_tematico"):
+            return
+        with self._response_cache_lock:
+            self._response_cache[key] = resp
+            self._response_cache.move_to_end(key)
+            while len(self._response_cache) > self._response_cache_max:
+                self._response_cache.popitem(last=False)  # remove mais antigo
+
     def answer_stream(self, query: str, history: list[dict] | None = None):
         """Wrapper: instrumenta com logging JSON. Delega pra _do_answer_stream."""
         rid = new_request_id()
         self._jlog.log("stream_received", request_id=rid, query=query[:200],
                        has_history=bool(history))
+        # Detecta se a resposta veio do cache (pra não re-cachear nem mentir no log)
+        cache_key = self._cache_key(query, history)
+        was_cached_before = cache_key in self._response_cache
         try:
             for evt, payload in self._do_answer_stream(query, history=history):
                 yield (evt, payload)
@@ -943,7 +983,11 @@ class RAGAgent:
                                    sources=len(resp.sources),
                                    top1_dist=round(top1_dist, 3) if top1_dist is not None else None,
                                    top1_rerank=round(top1_rerank, 3) if top1_rerank is not None else None,
-                                   has_citation="[FONTE:" in (resp.answer or ""))
+                                   has_citation="[FONTE:" in (resp.answer or ""),
+                                   from_cache=was_cached_before)
+                    # Salva no cache se for resposta nova (não veio do cache)
+                    if not was_cached_before:
+                        self._cache_set(cache_key, resp)
         except Exception as e:
             self._jlog.log("stream_error", request_id=rid,
                            error_type=type(e).__name__, error=str(e)[:300])
@@ -957,6 +1001,22 @@ class RAGAgent:
         """
         t0 = time.time()
         resp = AgentResponse(query=query, answer="")
+
+        # Cache LRU — replay rápido de queries repetidas (warmup, demos)
+        cache_key = self._cache_key(query, history)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            import copy
+            resp_copy = copy.deepcopy(cached)
+            resp_copy.elapsed_ms = int((time.time() - t0) * 1000)
+            yield ("meta", resp_copy)
+            # Replay tokens em chunks de ~80 chars pra UI mostrar streaming
+            text = resp_copy.answer or ""
+            chunk_size = 80
+            for i in range(0, len(text), chunk_size):
+                yield ("token", text[i:i+chunk_size])
+            yield ("done", resp_copy)
+            return
 
         # Camada 0 — classificador de intenção (chitchat / meta / real_question).
         # Evita 30s de pipeline em mensagens conversacionais ("obrigado", "explica melhor").
@@ -1196,37 +1256,56 @@ class RAGAgent:
 
     def _expand_to_parents(self, cur, children: list[RetrievedChunk]) -> list[RetrievedChunk]:
         """Small-to-Big: substitui cada child pelo seu parent pra mais contexto ao LLM.
-        Dedupe por parent_id (vários children do mesmo parent → 1 parent só)."""
+        Dedupe por parent_id (vários children do mesmo parent → 1 parent só).
+        Otimização: 1 query batch com IN, em vez de N queries."""
+        # 1ª passagem: identifica parent_ids únicos a buscar (preservando ordem
+        # do primeiro child que referencia cada parent)
+        unique_parent_ids = []
         seen_parents = set()
-        out = []
         for c in children:
-            if not c.parent_chunk_id:
-                # Chunk órfão (sem parent): inclui o próprio chunk
-                out.append(c)
-                continue
-            if c.parent_chunk_id in seen_parents:
-                # Parent já adicionado por outro child — pula sem perder slot
-                continue
-            seen_parents.add(c.parent_chunk_id)
-            cur.execute("""
+            if c.parent_chunk_id and c.parent_chunk_id not in seen_parents:
+                seen_parents.add(c.parent_chunk_id)
+                unique_parent_ids.append(c.parent_chunk_id)
+
+        # 1 query batch (em vez de N) — ganho ~200-400ms quando children compartilham parents
+        parent_rows = {}
+        if unique_parent_ids:
+            placeholders = ",".join(f":p{i}" for i in range(len(unique_parent_ids)))
+            params = {f"p{i}": pid for i, pid in enumerate(unique_parent_ids)}
+            cur.execute(f"""
                 SELECT p.chunk_id, p.pdf_id, p.breadcrumb, p.chunk_type, p.page_start,
                        p.text_raw, p.ano, p.tipo_canonico, m.registro_titulo
                 FROM chunks p LEFT JOIN manifest m ON m.pdf_id = p.pdf_id
-                WHERE p.chunk_id = :pid
-            """, {"pid": c.parent_chunk_id})
-            r = cur.fetchone()
-            if r:
-                pid, pdfid, bc, ctype, pg, raw_clob, ano, tipo, titulo = r
+                WHERE p.chunk_id IN ({placeholders})
+            """, params)
+            for row in cur.fetchall():
+                pid, pdfid, bc, ctype, pg, raw_clob, ano, tipo, titulo = row
                 raw = raw_clob.read() if raw_clob and hasattr(raw_clob, "read") else (raw_clob or "")
-                out.append(RetrievedChunk(
-                    chunk_id=pid, parent_chunk_id=None, pdf_id=pdfid,
-                    breadcrumb=bc or "", chunk_type=ctype, page_start=pg,
-                    text_raw=raw, text_embed="",
-                    ano=ano, tipo_canonico=tipo, registro_titulo=titulo,
-                    vector_dist=c.vector_dist,
-                ))
-            else:
+                parent_rows[pid] = (pdfid, bc, ctype, pg, raw, ano, tipo, titulo)
+
+        # 2ª passagem: monta saída na ordem original dos children, deduplicando parents
+        added_parents = set()
+        out = []
+        for c in children:
+            if not c.parent_chunk_id:
                 out.append(c)
+                continue
+            if c.parent_chunk_id in added_parents:
+                continue
+            added_parents.add(c.parent_chunk_id)
+            row = parent_rows.get(c.parent_chunk_id)
+            if row is None:
+                # Parent não encontrado no banco — fallback pro child
+                out.append(c)
+                continue
+            pdfid, bc, ctype, pg, raw, ano, tipo, titulo = row
+            out.append(RetrievedChunk(
+                chunk_id=c.parent_chunk_id, parent_chunk_id=None, pdf_id=pdfid,
+                breadcrumb=bc or "", chunk_type=ctype, page_start=pg,
+                text_raw=raw, text_embed="",
+                ano=ano, tipo_canonico=tipo, registro_titulo=titulo,
+                vector_dist=c.vector_dist,
+            ))
         return out
 
     def answer(self, query: str, history: list[dict] | None = None,
@@ -1234,6 +1313,17 @@ class RAGAgent:
         rid = new_request_id()
         self._jlog.log("query_received", request_id=rid, query=query[:200],
                        has_history=bool(history))
+        # Cache LRU — replay rápido de queries repetidas
+        cache_key = self._cache_key(query, history)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            import copy
+            resp = copy.deepcopy(cached)
+            resp.elapsed_ms = 0  # cache hit é instantâneo
+            self._jlog.log("query_complete", request_id=rid, from_cache=True,
+                           refused=resp.refused, refusal_reason=resp.refusal_reason,
+                           sources=len(resp.sources), elapsed_ms=0)
+            return resp
         try:
             resp = self._do_answer(query, history=history, original_query=original_query)
         except Exception as e:
@@ -1250,7 +1340,10 @@ class RAGAgent:
                        sources=len(resp.sources),
                        top1_dist=round(top1_dist, 3) if top1_dist is not None else None,
                        top1_rerank=round(top1_rerank, 3) if top1_rerank is not None else None,
-                       has_citation="[FONTE:" in (resp.answer or ""))
+                       has_citation="[FONTE:" in (resp.answer or ""),
+                       from_cache=False)
+        # Salva no cache se for resposta nova
+        self._cache_set(cache_key, resp)
         return resp
 
     def _do_answer(self, query: str, history: list[dict] | None = None,
