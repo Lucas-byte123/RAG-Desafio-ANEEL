@@ -484,6 +484,7 @@ class RetrievedChunk:
     ano: int | None
     tipo_canonico: str | None
     registro_titulo: str | None = None
+    pdf_url: str | None = None  # URL pública do PDF original (manifest.url)
     vector_dist: float | None = None
     bm25_score: float | None = None
     fused_score: float | None = None
@@ -647,7 +648,7 @@ def vector_search(cur, query_vec, k=VECTOR_K, filters=None) -> list[RetrievedChu
     sql = f"""
     SELECT c.chunk_id, c.parent_chunk_id, c.pdf_id, c.breadcrumb, c.chunk_type,
            c.page_start, c.text_raw, c.text_embed, c.ano, c.tipo_canonico,
-           m.registro_titulo,
+           m.registro_titulo, m.url,
            VECTOR_DISTANCE(v.embedding, :qvec, COSINE) AS dist
     FROM chunks c
     JOIN chunk_vectors v ON v.chunk_id = c.chunk_id
@@ -658,13 +659,13 @@ def vector_search(cur, query_vec, k=VECTOR_K, filters=None) -> list[RetrievedChu
     cur.execute(sql, params)
     results = []
     for row in cur.fetchall():
-        cid, pcid, pdfid, bc, ctype, pg, raw_clob, te, ano, tipo, titulo, dist = row
+        cid, pcid, pdfid, bc, ctype, pg, raw_clob, te, ano, tipo, titulo, url, dist = row
         text_raw = raw_clob.read() if raw_clob and hasattr(raw_clob, "read") else (raw_clob or "")
         results.append(RetrievedChunk(
             chunk_id=cid, parent_chunk_id=pcid, pdf_id=pdfid,
             breadcrumb=bc or "", chunk_type=ctype, page_start=pg,
             text_raw=text_raw, text_embed=te or "",
-            ano=ano, tipo_canonico=tipo, registro_titulo=titulo,
+            ano=ano, tipo_canonico=tipo, registro_titulo=titulo, pdf_url=url,
             vector_dist=float(dist),
         ))
     return results
@@ -689,7 +690,7 @@ def bm25_search(cur, query: str, k=BM25_K, filters=None) -> list[RetrievedChunk]
     sql = f"""
     SELECT c.chunk_id, c.parent_chunk_id, c.pdf_id, c.breadcrumb, c.chunk_type,
            c.page_start, c.text_raw, c.text_embed, c.ano, c.tipo_canonico,
-           m.registro_titulo,
+           m.registro_titulo, m.url,
            SCORE(1) AS s
     FROM chunks c
     LEFT JOIN manifest m ON m.pdf_id = c.pdf_id
@@ -704,13 +705,13 @@ def bm25_search(cur, query: str, k=BM25_K, filters=None) -> list[RetrievedChunk]
         raise
     results = []
     for row in cur.fetchall():
-        cid, pcid, pdfid, bc, ctype, pg, raw_clob, te, ano, tipo, titulo, score = row
+        cid, pcid, pdfid, bc, ctype, pg, raw_clob, te, ano, tipo, titulo, url, score = row
         text_raw = raw_clob.read() if raw_clob and hasattr(raw_clob, "read") else (raw_clob or "")
         results.append(RetrievedChunk(
             chunk_id=cid, parent_chunk_id=pcid, pdf_id=pdfid,
             breadcrumb=bc or "", chunk_type=ctype, page_start=pg,
             text_raw=text_raw, text_embed=te or "",
-            ano=ano, tipo_canonico=tipo, registro_titulo=titulo,
+            ano=ano, tipo_canonico=tipo, registro_titulo=titulo, pdf_url=url,
             bm25_score=float(score),
         ))
     return results
@@ -1547,14 +1548,14 @@ class RAGAgent:
             params = {f"p{i}": pid for i, pid in enumerate(unique_parent_ids)}
             cur.execute(f"""
                 SELECT p.chunk_id, p.pdf_id, p.breadcrumb, p.chunk_type, p.page_start,
-                       p.text_raw, p.ano, p.tipo_canonico, m.registro_titulo
+                       p.text_raw, p.ano, p.tipo_canonico, m.registro_titulo, m.url
                 FROM chunks p LEFT JOIN manifest m ON m.pdf_id = p.pdf_id
                 WHERE p.chunk_id IN ({placeholders})
             """, params)
             for row in cur.fetchall():
-                pid, pdfid, bc, ctype, pg, raw_clob, ano, tipo, titulo = row
+                pid, pdfid, bc, ctype, pg, raw_clob, ano, tipo, titulo, url = row
                 raw = raw_clob.read() if raw_clob and hasattr(raw_clob, "read") else (raw_clob or "")
-                parent_rows[pid] = (pdfid, bc, ctype, pg, raw, ano, tipo, titulo)
+                parent_rows[pid] = (pdfid, bc, ctype, pg, raw, ano, tipo, titulo, url)
 
         # 2ª passagem: monta saída na ordem original dos children, deduplicando parents
         added_parents = set()
@@ -1571,12 +1572,12 @@ class RAGAgent:
                 # Parent não encontrado no banco — fallback pro child
                 out.append(c)
                 continue
-            pdfid, bc, ctype, pg, raw, ano, tipo, titulo = row
+            pdfid, bc, ctype, pg, raw, ano, tipo, titulo, url = row
             out.append(RetrievedChunk(
                 chunk_id=c.parent_chunk_id, parent_chunk_id=None, pdf_id=pdfid,
                 breadcrumb=bc or "", chunk_type=ctype, page_start=pg,
                 text_raw=raw, text_embed="",
-                ano=ano, tipo_canonico=tipo, registro_titulo=titulo,
+                ano=ano, tipo_canonico=tipo, registro_titulo=titulo, pdf_url=url,
                 vector_dist=c.vector_dist,
             ))
         return out

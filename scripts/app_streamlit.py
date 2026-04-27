@@ -136,8 +136,13 @@ for idx, m in enumerate(st.session_state.messages):
                                  else f"dist {s.vector_dist:.3f}" if s.vector_dist is not None
                                  else "")
                         doc_ref = s.registro_titulo or s.pdf_id[:50]
+                        # Doc com link clicável pro PDF original (se existir url)
+                        if getattr(s, "pdf_url", None):
+                            doc_md = f"[{doc_ref}]({s.pdf_url}) 📄"
+                        else:
+                            doc_md = doc_ref
                         st.markdown(
-                            f"**[{i}]** {doc_ref}  \n"
+                            f"**[{i}]** {doc_md}  \n"
                             f"_{s.breadcrumb}_ • pg.{s.page_start} • {s.chunk_type} • {score}"
                         )
             if resp:
@@ -258,8 +263,13 @@ if prompt:
                              else f"dist {s.vector_dist:.3f}" if s.vector_dist is not None
                              else "")
                     doc_ref = s.registro_titulo or s.pdf_id[:50]
+                    # Doc com link clicável pro PDF original (se existir url)
+                    if getattr(s, "pdf_url", None):
+                        doc_md = f"[{doc_ref}]({s.pdf_url}) 📄"
+                    else:
+                        doc_md = doc_ref
                     st.markdown(
-                        f"**[{i}]** {doc_ref}  \n"
+                        f"**[{i}]** {doc_md}  \n"
                         f"_{s.breadcrumb}_ • pg.{s.page_start} • {s.chunk_type} • {score}"
                     )
 
