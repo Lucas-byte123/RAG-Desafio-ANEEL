@@ -143,6 +143,48 @@ COLLOQUIAL_EXPANSIONS = {
     "apagão": "interrupção fornecimento energia continuidade DEC FEC",
     "ficou sem luz": "interrupção fornecimento continuidade DEC FEC",
     "luz cortada": "suspensão fornecimento corte",
+    "religar a luz": "religação restabelecimento fornecimento prazo",
+    "religar luz": "religação restabelecimento fornecimento prazo",
+    "religar energia": "religação restabelecimento fornecimento prazo",
+    "voltar a luz": "religação restabelecimento fornecimento",
+    "ficou sem energia": "interrupção fornecimento continuidade DEC FEC",
+    "queda de energia": "interrupção fornecimento qualidade tensão",
+    "oscilação de energia": "qualidade tensão variação fornecimento",
+    "tensão baixa": "nível tensão fornecimento qualidade DRC",
+    # fatura / valores
+    "conta veio errada": "revisão fatura inconsistência erro faturamento",
+    "fatura errada": "revisão fatura inconsistência erro faturamento",
+    "fatura inflada": "valor cobrado revisão fatura faturamento aferição",
+    "conta veio alta": "revisão fatura faturamento aferição valor cobrado",
+    "conta muito alta": "revisão fatura faturamento aferição valor cobrado",
+    "conta absurda": "revisão fatura faturamento aferição valor cobrado",
+    "cobrança indevida": "ressarcimento devolução cobrança incorreta",
+    "valor cobrado errado": "ressarcimento revisão fatura cobrança",
+    # bandeiras tarifárias
+    "bandeira tarifária": "bandeira tarifária verde amarela vermelha escassez hídrica",
+    "bandeira vermelha": "bandeira tarifária vermelha adicional R$/kWh",
+    "bandeira amarela": "bandeira tarifária amarela adicional R$/kWh",
+    "bandeira verde": "bandeira tarifária verde sem adicional",
+    # horários e modalidades
+    "horário ponta": "posto tarifário ponta intermediário fora ponta tarifa branca",
+    "horário de pico": "posto tarifário ponta intermediário fora ponta",
+    "tarifa diferente por horário": "tarifa branca posto tarifário ponta",
+    "modalidade tarifária": "tarifa convencional branca grupo A grupo B",
+    # consumidor / direitos
+    "direitos do consumidor": "consumidor direitos deveres unidade consumidora",
+    "como reclamar": "ouvidoria reclamação ANEEL agência reguladora",
+    "reclamar na aneel": "ANEEL reclamação ouvidoria agência reguladora",
+    # medidor / leitura
+    "medidor": "medidor energia ativa medição faturamento",
+    "leitura do medidor": "leitura medidor faturamento aferição",
+    "medidor errado": "aferição medidor verificação inspeção",
+    # outros termos comuns
+    "subsídio": "subsídio cruzado tarifa social baixa renda",
+    "auxílio na conta": "tarifa social baixa renda subsídio benefício",
+    "energia limpa": "fontes renováveis solar eólica hídrica biomassa",
+    "energia renovável": "fontes renováveis solar eólica hídrica biomassa cogeração",
+    "carro elétrico": "veículo elétrico recarga eletroposto mobilidade",
+    "ponto de recarga": "eletroposto recarga veículo elétrico mobilidade",
 }
 
 
@@ -393,6 +435,7 @@ class AgentResponse:
     confidence: float = 0.0
     elapsed_ms: int = 0
     rewritten_query: str | None = None  # quando houve reescrita de follow-up
+    invalid_citations: list[str] = field(default_factory=list)  # fontes citadas que não estão nas sources
 
 
 MAX_HISTORY_TURNS = 5
@@ -878,6 +921,50 @@ def has_citation(answer: str) -> bool:
     return bool(re.search(r"\[FONTE:", answer, re.IGNORECASE) or re.search(r"\bpg\.\s*\d+", answer))
 
 
+# Regex pra capturar fontes citadas no padrão [FONTE: TIPO NUM/ANO, pg.N]
+# Tipo: REN, REH, DSP, PRT, DEC, ACP, ECP, etc (2-4 letras maiúsculas)
+# Numero: \d+/\d+
+_CITATION_RE = re.compile(
+    r"\[FONTE:\s*([^\]]+?)\]",
+    re.IGNORECASE,
+)
+_DOC_PATTERN_RE = re.compile(
+    r"\b([A-Z]{2,4})\s*[-–—:]?\s*[A-Za-zÀ-ÿ\s]*?\s*(\d+/\d{4})\b",
+)
+
+
+def validate_citations(answer: str, sources: list[RetrievedChunk]) -> list[str]:
+    """Verifica se cada [FONTE: ...] da resposta corresponde a um chunk realmente
+    recuperado. Retorna lista de citações 'fantasmas' (citadas mas não nas sources).
+
+    Tolerante a variações: 'REN 1000/2021' bate com 'REN - RESOLUÇÃO NORMATIVA 1000/2021'.
+    Citações sem padrão TIPO NUM/ANO reconhecível são ignoradas (não validáveis)."""
+    if not answer or not sources:
+        return []
+
+    # Constrói pool de identificadores normalizados das sources
+    source_keys = set()
+    for c in sources:
+        for field_val in (c.registro_titulo or "", c.pdf_id or ""):
+            for m in _DOC_PATTERN_RE.finditer(field_val):
+                tipo, numero = m.group(1).upper(), m.group(2)
+                source_keys.add(f"{tipo}|{numero}")
+
+    invalid = []
+    seen_invalid = set()
+    for cite_match in _CITATION_RE.finditer(answer):
+        cite_text = cite_match.group(1).strip()
+        m = _DOC_PATTERN_RE.search(cite_text)
+        if not m:
+            continue  # citação sem padrão reconhecível — não posso validar
+        tipo, numero = m.group(1).upper(), m.group(2)
+        key = f"{tipo}|{numero}"
+        if key not in source_keys and key not in seen_invalid:
+            invalid.append(cite_text)
+            seen_invalid.add(key)
+    return invalid
+
+
 # -------- AGENT --------
 
 class RAGAgent:
@@ -1214,6 +1301,8 @@ class RAGAgent:
         # respostas que começam com "Não encontrei..." não precisam validar fontes.
         if not has_citation(resp.answer) and not resp.answer.lower().startswith("não encontrei"):
             resp.answer += "\n\n[AVISO: resposta sem citação explícita — verifique fontes.]"
+        # Validador de citações: detecta citações fantasmas (citou doc não recuperado)
+        resp.invalid_citations = validate_citations(resp.answer, resp.sources)
         resp.elapsed_ms = int((time.time() - t0) * 1000)
         yield ("done", resp)
 

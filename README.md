@@ -7,6 +7,24 @@
 [![Oracle 23ai](https://img.shields.io/badge/Oracle-23ai_Vector-red.svg)](https://www.oracle.com/database/23ai/)
 [![Cohere](https://img.shields.io/badge/Cohere-Command_R%2B-purple.svg)](https://cohere.com/)
 
+---
+
+## ⚡ Quickstart (30 segundos, sem credenciais)
+
+```bash
+git clone https://github.com/Lucas-byte123/RAG-Desafio-ANEEL.git
+cd RAG-Desafio-ANEEL
+make smoke              # valida sintaxe + estrutura, sem precisar OCI
+```
+
+Ou abra a **[demo ao vivo](https://137-131-141-27.nip.io/)** direto no
+navegador — **zero setup**, queries reais sobre 27k PDFs.
+
+📖 **Avaliador**: leia [`AVALIACAO.md`](AVALIACAO.md) (5-30 min, com queries
+sugeridas + comandos) | 🐛 **Encontrou bug?** veja [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
+
+---
+
 Agente RAG (Retrieval-Augmented Generation) sobre **27.025 PDFs** da legislação da
 **ANEEL** (Agência Nacional de Energia Elétrica) — anos **2016, 2021 e 2022**.
 
@@ -429,26 +447,104 @@ Art. 5 (0.71), Despacho 4321/2022 (0.43). Latência total: 14.2s.
 
 ---
 
-## Custo OCI estimado
+## 💰 Plano Oracle Cloud usado e como obter
 
-Em produção contínua (1 VM + ATP Always Free + ~1.000 queries/dia):
+Este projeto foi construído **inteiramente no Oracle Cloud Free Tier**. Você
+consegue replicar o ambiente sem custo (ou com custo mínimo) seguindo o mesmo
+caminho.
+
+### O que foi usado
+
+| Recurso | Plano | Custo |
+|---|---|---|
+| **Autonomous Database 23ai** (banco vetorial + BM25) | Always Free Tier | **R$ 0** perpétuo |
+| **VM Compute** E5.Flex 2 OCPU x86 (servidor da demo) | Crédito promocional 30 dias | **R$ 0** durante crédito |
+| **VM A1.Flex Always Free** (alternativa ARM, 4 OCPU/24 GB) | Always Free Tier | **R$ 0** perpétuo |
+| **Object Storage** (~5 GB pra PDFs ANEEL) | Always Free Tier (até 20 GB) | **R$ 0** perpétuo |
+| **OCI Generative AI** (Cohere Embed v3 + Command R+) | On-demand pay-per-use, descontado do crédito | **~R$ 285/mês** após crédito esgotar |
+| **Let's Encrypt** (HTTPS automático via Caddy) | Grátis | **R$ 0** |
+
+**Total durante crédito promocional (30 dias):** R$ 0 (cobre folgadamente
+desenvolvimento + 30 dias de demo).
+
+**Total após crédito (continuar rodando 24/7):** ~R$ 285/mês com 1k queries/dia,
+sendo o grosso (~R$ 280) do Cohere Command R+ output. Migrando pra A1.Flex
+Always Free e desligando à noite, fica em ~R$ 50/mês.
+
+### Como o avaliador pega o mesmo plano
+
+> ⚠️ **Importante:** Free Tier requer cartão de crédito válido pra verificação
+> (não é cobrado se ficar dentro do limite).
+
+**1. Criar conta:** acesse https://signup.oraclecloud.com/
+
+Você ganha:
+- **30 dias** com **R$ 2.500 de crédito promocional** (~US$ 300) pra usar em
+  qualquer recurso
+- **Always Free Tier** perpétuo após o período promocional, com:
+  - 2× Autonomous Database (20 GB cada, 2 OCPU)
+  - 1× ARM A1.Flex (até 4 OCPU + 24 GB RAM ou pode dividir em até 4 VMs)
+  - 2× AMD VM Compute (1/8 OCPU + 1 GB RAM cada — pequenas)
+  - 200 GB Block Storage
+  - 20 GB Object Storage
+  - 10 TB de saída de rede/mês
+  - Lista completa: https://www.oracle.com/cloud/free/
+
+**2. Provisionar Autonomous Database 23ai:**
+- Console OCI → Oracle Database → Autonomous Database → Create
+- Workload type: **Transaction Processing**
+- Marque **Always Free**
+- Database version: **23ai**
+- Defina senha do ADMIN forte
+- Após provisionado, baixe o **Wallet** e a senha (vai pra `.secrets/wallet/`)
+
+**3. Provisionar VM Compute:**
+- Console OCI → Compute → Instances → Create
+- Shape: **VM.Standard.A1.Flex** (ARM Always Free, recomendado)
+- OS: **Oracle Linux 9**
+- 4 OCPU / 24 GB RAM
+- Salve a chave SSH
+
+**4. Habilitar OCI Generative AI:**
+- Console OCI → Generative AI → Models
+- Confirma que `Cohere Embed Multilingual v3` e `Cohere Command R+ 08-2024`
+  aparecem como `ACTIVE`
+- Disponível em: `sa-saopaulo-1`, `us-chicago-1`, `eu-frankfurt-1`,
+  `uk-london-1`
+
+**5. Configurar OCI CLI local:**
+```bash
+oci setup config
+# segue prompts: tenancy OCID, user OCID, RSA key, região
+```
+
+**6. Continuar:** ver [`README.md`](README.md) seção "Como rodar (Oracle ATP
+já populado)" se quiser pular a ingestão (impossível sem ter o seed dataset),
+ou seção "Rebuildar o banco do zero" pra rodar pipeline completo (~18h
+wall-clock).
+
+### Observação: a demo pública
+
+A URL https://137-131-141-27.nip.io/ está hospedada na **VM E5.Flex**
+(não Always Free) durante o crédito promocional. Após **2026-05-25** o
+crédito esgota e a URL pode ficar offline. Pra avaliação após essa data,
+clone o repo e suba seu próprio Free Tier.
+
+### Detalhamento de custo (após crédito esgotar)
 
 | Item | Modelo de cobrança | Custo mensal aprox. |
 |---|---|---|
 | Autonomous DB 23ai (Always Free) | grátis até 20 GB / 2 OCPU | **R$ 0** |
-| VM Compute (E5.Flex 2 OCPU) | $0.025/h x 720h | **~R$ 90** |
+| VM Compute (E5.Flex 2 OCPU) | $0.025/h × 720h | **~R$ 90** |
 | VM A1.Flex Always Free (alternativa) | grátis até 4 OCPU / 24 GB | **R$ 0** |
 | Object Storage (~5 GB) | $0.0255/GB-mês | **~R$ 0,65** |
 | Cohere Embed Multilingual v3 | $0.10 / 1M tokens | **~R$ 5** (1k queries/dia) |
 | Cohere Command R+ 08-2024 | $2.50 / 1M input + $10 / 1M output | **~R$ 280** (1k queries/dia, ~3k tokens/resposta) |
-| Let's Encrypt cert | grátis | R$ 0 |
+| Let's Encrypt cert | grátis | **R$ 0** |
 | **Total mensal estimado** | | **~R$ 375** (E5) ou **~R$ 285** (A1 free) |
 
-Custos do **embedding em massa** (one-time): ~250.000 chunks × 400 tokens = 100M
-tokens × $0.10/M = **~R$ 50** uma vez só.
-
-Crédito promocional OCI Free Tier: R$ 2.500 / 30 dias cobre folgadamente o
-desenvolvimento e a apresentação.
+**Embedding em massa** (one-time): ~250.000 chunks × 400 tokens = 100M tokens ×
+$0.10/M = **~R$ 50** uma vez só.
 
 ---
 
