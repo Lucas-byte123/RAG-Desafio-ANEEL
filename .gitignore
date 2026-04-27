@@ -1,0 +1,38 @@
+# NUNCA commitar — segredos
+.secrets/
+.oci/
+*.pem
+*wallet*.zip
+*.env
+.env
+.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Saídas geradas pelo pipeline (regerá quem rodar)
+manifest/
+inspect/
+logs/
+*.parquet
+*.log
+bge_warmup.log
+
+# Screenshots / capturas de tela de dev (não fazem parte do produto)
+*.png
+*.jpg
+*.jpeg
+Captura\ de\ tela*
+
+# Editores e SO
+.vscode/
+.idea/
+.gstack/
+.claude/
+*.swp
+.DS_Store
+Thumbs.db

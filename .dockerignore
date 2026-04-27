@@ -1,0 +1,54 @@
+# Credenciais — montadas via volume em runtime, NUNCA copiar pra imagem
+.secrets/
+.oci/
+*.pem
+*wallet*.zip
+*.env
+.env
+.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Pipeline de ingestão (artefatos locais; não precisam pra rodar o agente)
+manifest/
+inspect/
+logs/
+*.parquet
+*.csv
+data/
+pdfs/
+
+# PDFs e screenshots
+*.pdf
+*.png
+*.jpg
+*.jpeg
+
+# Docs e metadados que não rodam (a imagem não precisa do README)
+*.md
+biblioteca_aneel_*.json
+
+# Git e editores
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Testes / utilitários de inspeção (não precisam na imagem de produção)
+scripts/test_*.py
+scripts/inspect_*.py
+scripts/debug_*.py
+scripts/check_*.py
+scripts/quick_*.py
+scripts/pick_*.py
+scripts/review_*.py
+scripts/latency_*.py
+
+# Logs de bge warmup, etc
+*.log
+bge_warmup.log

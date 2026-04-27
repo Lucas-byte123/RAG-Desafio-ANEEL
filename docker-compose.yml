@@ -1,0 +1,65 @@
+# RAG ANEEL — orquestração local pra testar/demonstrar o agente.
+#
+# Pré-requisitos no host:
+#   1. .env preenchido (DB_ADMIN_PASS, ver .env.example)
+#   2. Wallet do Autonomous DB em .secrets/wallet/
+#   3. Senha do wallet em .secrets/wallet.pass
+#   4. Config OCI em ~/.oci/config + chave .pem (oci setup config)
+#
+# Subir:    docker compose up --build
+# Acessar:  http://localhost:8501  (UI Streamlit)
+#           http://localhost:8502/health  (status JSON)
+
+services:
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rag-aneel:latest
+    container_name: rag-aneel-ui
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8501:8501"
+    volumes:
+      # Wallet do Autonomous DB (caminho esperado por rag_agent.py: .secrets/wallet)
+      - ./.secrets/wallet:/app/.secrets/wallet:ro
+      - ./.secrets/wallet.pass:/app/.secrets/wallet.pass:ro
+      # Credenciais OCI Generative AI (config + chave privada referenciada por key_file)
+      - ${HOME:-${USERPROFILE}}/.oci:/home/rag/.oci:ro
+    depends_on:
+      - health
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  health:
+    image: rag-aneel:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-aneel-health
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HEALTH_HOST: 0.0.0.0
+      HEALTH_PORT: 8502
+    ports:
+      - "8502:8502"
+    volumes:
+      - ./.secrets/wallet:/app/.secrets/wallet:ro
+      - ./.secrets/wallet.pass:/app/.secrets/wallet.pass:ro
+      - ${HOME:-${USERPROFILE}}/.oci:/home/rag/.oci:ro
+    command: ["python", "scripts/health_server.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8502/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
