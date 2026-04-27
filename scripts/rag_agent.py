@@ -1081,7 +1081,9 @@ class RAGAgent:
             raise
 
     def _do_answer_stream(self, query: str, history: list[dict] | None = None):
-        """Yields (event_type, payload). event_type ∈ {'meta', 'token', 'done'}.
+        """Yields (event_type, payload). event_type ∈ {'phase', 'meta', 'token', 'done'}.
+        - phase: payload = string ('embedding'|'retrieval'|'rerank'|'expanding'|'generating')
+                 — usado pela UI pra mostrar progresso granular
         - meta:  payload = AgentResponse parcial (sem answer ainda)
         - token: payload = string (chunk de texto)
         - done:  payload = AgentResponse final (com answer completo)
@@ -1183,9 +1185,11 @@ class RAGAgent:
             if hyde_resp and len(hyde_resp) > 30:
                 embed_text = f"{query_expanded}\n\n{hyde_resp}"
 
+        yield ("phase", "embedding")
         qvec = embed_query(self.inf, self.embed_model.id, self.tenancy, embed_text)
         cur = self.conn.cursor()
         try:
+            yield ("phase", "retrieval")
             vec_res = vector_search(cur, qvec, k=VECTOR_K, filters=filters)
             bm25_res = bm25_search(cur, query_expanded, k=BM25_K, filters=filters)
             fused = rrf_fuse(vec_res, bm25_res)
@@ -1222,6 +1226,7 @@ class RAGAgent:
                     yield ("done", resp)
                     return
 
+            yield ("phase", "rerank")
             query_for_rerank = expand_query_for_rerank(query_for_search)
             bge = get_bge_reranker()
             if bge is not None:
@@ -1270,6 +1275,7 @@ class RAGAgent:
 
             resp.confidence = 1.0 - top1_dist
             resp.sources = top
+            yield ("phase", "expanding")
             contexts_for_llm = self._expand_to_parents(cur, top)
         finally:
             try:
@@ -1280,6 +1286,7 @@ class RAGAgent:
 
         # Sinaliza meta (UI pode mostrar "Buscando concluído, gerando resposta…")
         yield ("meta", resp)
+        yield ("phase", "generating")
 
         # Stream da geração
         full_text_parts = []

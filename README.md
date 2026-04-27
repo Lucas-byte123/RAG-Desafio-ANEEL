@@ -71,6 +71,12 @@ o histórico, em **3s** (vs 30s do pipeline normal), com badge claro:
 
 ![Meta-conversa](docs/screenshots/05-meta-conversa.png)
 
+**Indicador de progresso por etapas** — durante os ~30s do pipeline, a UI
+mostra em qual estágio está (Embedding → Retrieval → Rerank → Expanding →
+Generating), reduzindo a sensação de espera:
+
+![Progresso por etapas](docs/screenshots/06-progresso-etapas.png)
+
 ---
 
 ## 🌐 Demo ao vivo

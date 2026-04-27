@@ -179,19 +179,31 @@ if prompt:
         elif intent == "meta":
             initial_status = "💬 _Respondendo no contexto da conversa (sem buscar na base)..._"
         else:
-            initial_status = "🔍 _Buscando na base..._"
+            initial_status = "🔵 _Iniciando..._"
+
+        # Mapeamento de phase → texto visual + emoji + step
+        # 5 etapas pra dar sensação de progresso durante os ~30s do pipeline
+        PHASE_LABELS = {
+            "embedding":  ("🔵", "Etapa 1/5 — Embedding da pergunta (Cohere v3)..."),
+            "retrieval":  ("🔍", "Etapa 2/5 — Buscando no banco (vetor HNSW + BM25)..."),
+            "rerank":     ("🧮", "Etapa 3/5 — Rerankeando candidatos (bge-reranker-v2-m3)..."),
+            "expanding":  ("📚", "Etapa 4/5 — Expandindo contexto (Parent-Child)..."),
+            "generating": ("✍️", "Etapa 5/5 — Gerando resposta (Cohere Command R+)..."),
+        }
 
         try:
             status_placeholder.markdown(initial_status)
             buf = []
 
             for evt, payload in agent.answer_stream(prompt, history=history_before):
-                if evt == "meta":
+                if evt == "phase":
+                    if intent == "real_question":
+                        emoji, label = PHASE_LABELS.get(payload, ("⏳", payload))
+                        status_placeholder.markdown(f"{emoji} _{label}_")
+                elif evt == "meta":
                     meta_resp = payload
                     if payload.rewritten_query:
                         st.info(f"🔄 Reformulado para busca: _{payload.rewritten_query}_")
-                    if intent == "real_question":
-                        status_placeholder.markdown("✍️ _Gerando resposta..._")
                 elif evt == "token":
                     buf.append(payload)
                     answer_placeholder.markdown("".join(buf))
